@@ -1,0 +1,60 @@
+第三方依赖与归属（THIRD-PARTY NOTICES）
+=========================================
+
+本项目以 MIT 许可证开源。以下第三方组件被直接或间接使用，按其各自许可证提供。
+本项目作者不对这些组件的内容负责；其版权归各自所有者。
+
+---------------------------------------------------------------------------
+1. JSZip
+   - 版本：3.10.1
+   - 许可证：MIT
+   - 用途：前端「打包导出 ZIP」功能
+   - 位置：deploy-pkg/web/vendor/jszip.min.js（已随仓库提交）
+   - 来源：https://github.com/Stuk/jszip  /  https://stuartk.com/jszip
+
+---------------------------------------------------------------------------
+2. marked
+   - 许可证：MIT
+   - 用途：Markdown 渲染
+   - 位置：由 deploy-pkg/deploy/setup.sh 在部署时拉取到 deploy-pkg/web/vendor/
+   - 来源：https://github.com/markedjs/marked
+   - 精确版本见 setup.sh 中的固定引用
+
+---------------------------------------------------------------------------
+3. DOMPurify
+   - 许可证：MPL-2.0（Mozilla Public License 2.0）
+   - 用途：渲染前 HTML 消毒，防 XSS
+   - 位置：由 deploy-pkg/deploy/setup.sh 在部署时拉取到 deploy-pkg/web/vendor/
+   - 来源：https://github.com/cure53/DOMPurify
+
+---------------------------------------------------------------------------
+4. highlight.js
+   - 许可证：BSD 3-Clause
+   - 用途：代码高亮
+   - 位置：由 deploy-pkg/deploy/setup.sh 在部署时拉取到 deploy-pkg/web/vendor/highlight/
+   - 来源：https://github.com/highlightjs/highlight.js
+
+---------------------------------------------------------------------------
+5. Tree-sitter（wasm）
+   - 许可证：MIT
+   - 用途：后端零 token 静态语法校验（lib/static-check.js）
+   - 说明：以 wasm 形式在 Node 端加载，不随本仓库提交运行时包，由依赖解析获得
+   - 来源：https://github.com/tree-sitter/tree-sitter
+
+---------------------------------------------------------------------------
+6. Fastify
+   - 许可证：Apache-2.0
+   - 用途：后端 HTTP 代理框架（deploy-pkg/deepseek-proxy）
+   - 说明：作为 npm 依赖安装，详见 package.json
+   - 来源：https://github.com/fastify/fastify
+
+---------------------------------------------------------------------------
+7. 模型供应商 API（默认 DeepSeek，亦支持 OpenAI / OpenRouter / 通义千问 / 月之暗面 Kimi / 本地 Ollama 等 OpenAI 兼容端点）
+   - 说明：本项目调用的模型能力由用户所选的供应商提供，属外部服务，
+           非本仓库分发的组件；请遵守对应供应商的服务条款。
+           默认对接 DeepSeek 官方 API（见 README「多模型支持」一节）。
+   - 来源：https://api.deepseek.com（及其他供应商官方端点）
+
+===========================================================================
+以上组件的完整许可证文本可在各自的官方仓库中获取。
+若某组件的许可证要求在本软件中附带其声明，本 NOTICE 文件即满足该要求。

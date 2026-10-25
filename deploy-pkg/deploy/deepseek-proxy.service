@@ -1,0 +1,17 @@
+[Unit]
+Description=DeepSeek Proxy (智能代码生成平台后端)
+After=network.target
+
+[Service]
+Type=simple
+WorkingDirectory=/opt/deepseek-proxy
+ExecStart=/usr/local/lighthouse/softwares/nodejs/node/bin/node --env-file=/opt/deepseek-proxy/.env --max-old-space-size=192 server.js
+Restart=on-failure
+RestartSec=3
+User=root
+StandardOutput=journal
+StandardError=journal
+MemoryMax=512M
+
+[Install]
+WantedBy=multi-user.target

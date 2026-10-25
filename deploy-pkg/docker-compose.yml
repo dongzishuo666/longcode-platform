@@ -1,0 +1,49 @@
+# 智能长代码生成平台 —— 一键容器化部署
+# 用法（在 deploy-pkg/ 目录）：
+#   docker compose up -d        # 构建并后台启动
+#   docker compose logs -f web  # 看前端日志
+#   docker compose down         # 停止并移除容器（数据卷 proxy_data 保留）
+#
+# 之后浏览器打开 http://localhost:8080 即可使用。
+# 前端默认 apiBase 为同源 '/api'，由 nginx 反代到后端，无需配置 CORS。
+
+services:
+  # ---- 后端：Fastify 多模型代理 ----
+  backend:
+    build:
+      context: ./deepseek-proxy
+      dockerfile: Dockerfile
+    image: longcode-backend:latest
+    restart: unless-stopped
+    environment:
+      # 容器间通信必须监听 0.0.0.0（不是代码默认的 127.0.0.1）
+      HOST: "0.0.0.0"
+      PORT: "8787"
+      # 服务端默认上游（前端不填上游地址时回落）；多模型默认开
+      DEEPSEEK_API_BASE: "https://api.deepseek.com"
+      LC_MULTI_MODEL: "1"
+      ALLOW_LOCAL_TARGETS: "0"
+      ALLOWED_ORIGIN: ""
+      LOG_LEVEL: "info"
+    # 只对同网其他容器暴露，不映射到宿主机端口
+    expose:
+      - "8787"
+    # 运行态记忆库持久化（否则容器重建即丢）
+    volumes:
+      - proxy_data:/app/data
+
+  # ---- 前端：nginx 静态托管 + 反代 /api ----
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    image: longcode-web:latest
+    restart: unless-stopped
+    depends_on:
+      - backend
+    # 宿主端口 8080 → 容器 80；如 8080 被占用可自行修改
+    ports:
+      - "8080:80"
+
+volumes:
+  proxy_data:

@@ -1,0 +1,582 @@
+# 长代码智能生成平台 · 完整设计总方案
+
+> 本方案整合全部已确立约束（技术栈、4 项裁决、错误码表、10 大工作流、7 端点链路、4 类 Prompt、续写判定、容错规则），作为豆包（前端）与 DeepSeek（后端）的**唯一实现依据**。方案不含具体代码，仅输出功能规范、工作流细则、Prompt 规则与质量边界。任何与本方案冲突的局部表述，以本方案为准。
+
+---
+
+## 修订记录
+
+| 版本 | 日期 | 变更 |
+|---|---|---|
+| v1.0 | 2026-10-09 | 初版：7 模块完整方案（架构 / 前端工作流 / 后端流程 / Prompt 体系 / 续写机制 / 数据结构 / 质量容错） |
+| v2.0 | 2026-10-12 | **同步代码实际状态**：端点 3→7；`MAX_CONTINUE` 5→10；续写判定改为 finish_reason 优先；新增「需求工作流」「契约驱动双端生成」「零 token 质量闸门」三大工作流；新增模块结构、测试、安全三章 |
+
+### v2.0 相对 v1.0 的修正项（以本文为准）
+
+| v1.0 原文 | 实际情况 | 修正为 |
+|---|---|---|
+| §5.2 `MAX_CONTINUE = 5` | 代码为 10（`index.html`） | **10**（1 次原始 + 最多 10 次续写） |
+| §5.1 续写判定 = 三条件（长度≥300 / 含 ``` / 末尾非 `;}]`） | `shouldContinue()` 已改为 **finish_reason 优先**，启发式仅作兜底 | 见 §5.1 |
+| §1.1 / §3.1 仅 chat/test/health 三端点 | 已扩到 7 端点 | 见 §1.1 / §3.1 / §3.7 |
+| 无需求工作流 / 契约驱动 / 质量闸门章节 | 三者均已实现并有测试 | 新增 §2.8–2.10 / §3.8 / §9 |
+| 未定义安全边界 | 已实现可选 APP_TOKEN + static-check 并发闸 | 见 §7.7 |
+
+---
+
+## 0. 约束基线（先于一切，不可修改）
+
+### 0.1 角色分工
+| 角色 | 职责 |
+|---|---|
+| 统筹方（本方案） | 功能逻辑、工作流、Prompt 体系、前后端边界、质量标准、全流程落地 |
+| 豆包（前端） | 交互、状态、渲染、本地持久化、续写循环控制 |
+| DeepSeek（后端） | 无状态代理、校验、Prompt 注入、官方模型对接、流式标准化、容错 |
+
+### 0.2 技术栈基线
+| 层级 | 选型 |
+|---|---|
+| 前端 | HTML5 + CSS3 + 原生 JavaScript ES2022 + localStorage + fetch + SSE；渲染用 marked / highlight.js / DOMPurify |
+| 前端纯函数层 | **ES Module**：`quality-text.mjs`（文本/符号/修复）、`dual-text.mjs`（契约/定向修复/报告）——浏览器与 Node 测试 import **同一份代码**（单一事实来源） |
+| 后端 | Node.js 20 LTS + Fastify + 原生 fetch；无数据库、无文件持久化、无 WebSocket |
+| 后端模块 | `server.js` + `lib/`：validate / errors / deepseek / sse / static-check / api-contract / review |
+| 静态校验 | web-tree-sitter（wasm），语言白名单 + LRU + RSS 水位三道闸 |
+| 模型 | DeepSeek 官方，白名单 `deepseek-chat` / `deepseek-reasoner` / `deepseek-flash` / `deepseek-v4-pro` |
+| 通信 | 前端↔后端 HTTP+SSE；后端↔官方 HTTPS+SSE |
+
+### 0.3 四项裁决（已钉死）
+| 裁决 | 结论 |
+|---|---|
+| API Key | 前端持有并每次请求传入；后端无状态校验，不存储、不写日志、不写环境变量 |
+| 重试 | 后端唯一自动重试层；前端仅看门狗 + 超时兜底 + 手动重生成，不自动重试 |
+| SSE | 后端标准化转发，前端只认统一事件 `{type, data}` |
+| 续写循环 | 前端控制最多 10 轮（v2.0 修正，v1.0 为 5）；后端无感，仅按 messages 转发 |
+
+### 0.4 核心逻辑不可改清单
+`shouldContinue`（finish_reason 优先 + 启发式兜底）、续写指令原文、文件上传 Prompt 原文、测试 Prompt `hi`、systemPrompt 注入位置、7 处 `saveAll` 触发、消息操作矩阵、错误码七码结构、双通道错误规则、`preCheck:false` 行号基准（§5.6）、自动修复后复校验（§2.10）。
+
+---
+
+## 1. 整体业务架构
+
+### 1.1 三层链路
+```
+浏览器（前端 SPA + 纯函数 ES Module）
+   │  POST /api/chat          流式对话（SSE，标准化事件）
+   │  POST /api/review        增量代码审查（非流式 + 强制 JSON + 关思考链 + 独立超时）
+   │  POST /api/static-check  零 token 静态校验（Tree-sitter 语法/符号/冲突/压缩）
+   │  POST /api/extract-api   零 token 接口提取（前端调用 / 后端路由定义）
+   │  POST /api/consistency   零 token 三方一致性比对（契约 / 前端 / 后端）
+   │  POST /api/test          连接测试（非流式）
+   │  GET  /api/health        健康检查
+   ▼
+Node 后端（Fastify，无状态代理）
+   │  校验 → 注入 systemPrompt → 调用官方
+   │  POST https://api.deepseek.com/chat/completions  (stream:true / false)
+   ▼
+DeepSeek 官方模型
+   │  原生 SSE delta / JSON
+   ▼
+后端标准化包装 → SSE 事件流 / JSON → 前端解析渲染
+```
+
+**错误通道分流（双通道，总方案 3.6 不变）**：
+- 流式前 → HTTP 状态码 + JSON `{ code, message }`
+- 流式中 → SSE `{ type:"error", data:{ code, message } }`
+
+### 1.2 前后端分工边界
+| 能力 | 前端 | 后端 |
+|---|---|---|
+| 会话/消息/配置存储 | ✅ localStorage | ❌ 无 |
+| 续写循环与轮次控制 | ✅ | ❌ 无感 |
+| 续写指令注入 messages | ✅ | ❌ |
+| systemPrompt 注入 | 传入字段 | ✅ 拼到 messages 最前 |
+| 文件/图片读取与 base64 | ✅ | ❌ 透传 |
+| Markdown/高亮/净化渲染 | ✅ | ❌ |
+| 自动重试 | ❌ | ✅ ≤2 次 |
+| 看门狗/超时兜底 | ✅ 兜底 | ✅ 权威 |
+| 错误分类与码 | 按 code 映射文案 | ✅ 产生 code |
+| API Key 校验 | 非空阻断 | 格式+上游鉴权 |
+| 语法校验 / 符号提取 / 输入压缩 | 调用 + 展示 | ✅ Tree-sitter 本地计算（零 token） |
+| 接口提取 / 三方一致性比对 | 调用 + 渲染报告 | ✅ 正则本地计算（零 token） |
+| 增量代码审查 | 调用 + 应用修复 + 复校验 | ✅ Prompt 组装 / 模型调用 / 输出归一化 |
+| 修复行号换算与写回 | ✅ 按块偏移切片 | ❌ 不做（行号以**未压缩**代码为准） |
+| 契约定义与编辑 | ✅ 用户可在线编辑确认 | ❌ 只接收 |
+
+### 1.3 数据流向
+- **读**：启动时 `loadAll()` 一次性读 localStorage → 渲染。
+- **写**：7 处触发 `saveAll()` 全量写回（见 2.7）。
+- **请求**：前端组装 messages（含可选 system）→ 后端注入用户 systemPrompt → 转发官方 → 标准化回传 → 前端累积并落库。
+- **后端无状态**：请求结束即丢弃，不缓存任何用户数据。
+
+### 1.4 部署形态
+静态前端文件 + 单进程 Node 后端；可选 Nginx 反代 / PM2 守护 / Docker 封装；目标单核、内存 <100MB、前端包 <1MB。
+
+---
+
+## 2. 前端工作流规范（10 大工作流）
+
+### 2.1 应用启动
+```
+页面加载 → loadAll() 读 localStorage
+  ├─ conversations[] / currentConvId / config
+判断：
+  ├─ 无数据或会话为空 → createConversation() 建空会话并激活
+  └─ 有数据 → 校验 currentConvId 存在
+        ├─ 存在 → renderConvList() + renderMessages() + updateTokenInfo()
+        └─ 不存在 → 回退到 conversations[0]
+就绪，等待输入
+```
+- 触发：`DOMContentLoaded`。
+- 状态变化：`state.ready = true`。
+- 持久化：启动不写，仅读。
+- 边界：localStorage 解析失败（损坏 JSON）→ 视为无数据，新建会话，不崩溃。
+
+### 2.2 用户发送消息
+```
+输入文本/图片/代码文件 → 点「发送」或 Ctrl+Enter
+  ├─ 校验：内容非空、apiKey 已填（空则阻断+提示）
+  ├─ 禁用发送按钮，state.stopFlag = false
+  ├─ 构建 userContent：
+  │     ├─ 纯文本 → string
+  │     └─ 含图片 → [{type:'text',text}, {type:'image_url',image_url:{url:base64}}, ...]
+  ├─ push 到 conv.messages
+  ├─ 首条消息 → updateConvTitle()（前 20 字，仅当标题为“新对话”）
+  ├─ 清空输入框/图片预览 → 重渲染
+  └─ saveAll()
+streamRequest(conv.messages)
+```
+- 图片前置校验：单张 ≤4MB、总数 ≤5、格式 png/jpg/webp，不合规阻断不发请求。
+- 文件上传：读取内容后**填入输入框**（见 4.3），不直接发送。
+
+### 2.3 单次请求响应（streamRequest）
+```
+1. 组装 requestMsgs = [system(若用户填), ...messages]  ← 前端只传 messages+systemPrompt 字段，最终注入由后端完成（见 3.3）
+2. 创建流式容器 .msg.ai > span
+3. POST /api/chat（fetch + AbortController）
+   ├─ 连接建立超时 30s（前端兜底 abort）
+   └─ 流式空闲看门狗 60s（无新 chunk 则 abort）
+4. 解析标准化 SSE：
+   ├─ type:reasoning → 累积 fullReasoning，插入思考块
+   ├─ type:content   → 累积 fullContent，追加流式 span
+   ├─ type:done      → 结束流式
+   └─ type:error     → 保留已渲染内容 + 追加错误提示，终止
+   每收到事件 → 重置看门狗；未手动滚动 → 自动滚底
+5. 结束：createMsgElement() 生成结构化 DOM（代码块+复制+思考块）→ replaceWith 替换纯文本容器
+6. push assistant 消息到 conv.messages → saveAll()
+7. 返回 { content, reasoning }
+```
+- 状态：`state.streaming = true/false`。
+- 停止：用户点「停止」→ `state.stopFlag=true` + abort，保留已生成内容并落库。
+
+### 2.4 长代码自动续写
+见第 5 章完整状态机。前端在收到 `result.content` 后判定 `mode==='longcode' && shouldContinue(result, content)`，满足则循环（最多 **10** 轮），每轮把完整历史 + 续写指令重新组装发起请求，结果拼接回最后一条 assistant 消息，每轮渲染+保存。
+
+### 2.5 消息操作
+| 操作 | 触发 | 结果 | 持久化 |
+|---|---|---|---|
+| 编辑 | hover→编辑 | 文本回填输入框，**删除该条及之后所有**（需确认） | saveAll |
+| 删除 | hover→删除 | 仅删该条 | saveAll |
+| 复制 | 助手 hover→复制 | 提取纯文本（多模态拼接所有 text）写剪贴板 | 无 |
+| 重生成 | 助手 hover→重生成 | **删除该条及之后所有**，重新 sendRequest | saveAll |
+- 编辑/重生成的“删除之后”语义：截断到该消息之前，保证上下文一致。
+
+### 2.6 会话管理
+```
+新建 → unshift 到 conversations[]，切换激活，重渲染
+切换 → 更新 currentConvId，重渲染消息，重置滚动
+删除 → confirm → splice → 若删当前则切 conversations[0]
+重命名 → 双击标题 prompt
+标题 → 首条用户消息前 20 字（仅当仍为“新对话”）
+```
+- 每次操作后 saveAll。
+- 边界：删空所有会话 → 自动新建一个空会话，保证 currentConvId 始终有效。
+
+### 2.7 本地数据持久化（saveAll 触发点）
+1. 配置字段变化（apiKey/model/mode/systemPrompt/apiBase 的 input/change）
+2. 温度滑块拖动
+3. 新建/切换/删除/重命名会话
+4. 发送后（用户消息入列、助手回复入列）
+5. 消息操作（编辑/删除/重生成）
+6. 长代码续写每一轮
+7. 停止生成后（保留半截内容）
+- 写入策略：全量序列化 `conversations/currentConvId/config` 三键；防抖用于配置高频变化（如温度拖动），消息类即时写。
+- **v2.0 扩充**：`config` 增加 `appToken`（应用令牌）、`quality`（闸门开关 / 审查开关 / 降级态 / 符号表 / 已处理指纹集）、`dualAutoRepair`（一致性自动对齐开关）、`req`（需求工作流配置）。`conversations[].messages[]` 增加 `isDual` / `isReport` / `isContract` 结构化标记（见 §6.3）。
+
+### 2.8 需求工作流（需求 → 方案 → 代码）
+```
+用户输入需求
+  ↓ 阶段一：需求分析助手（推理模型 + 低温）
+产出结构化实施方案（含技术栈 / 模块划分 / 接口契约 JSON）
+  ↓ 用户可在线编辑确认（方案面板，未确认不生成）
+  ↓ 阶段二：代码生成助手（方案常驻上下文）
+按方案生成代码 → 质量闸门（见 2.10）
+```
+- 设计目的：从流程上解决「需求含糊导致生成跑偏」——先对齐方案，再落代码。
+- 契约 JSON 由用户在方案面板编辑，是后续双端生成的唯一基准。
+- 该工作流已能产出可运行项目骨架（实测生成完整 React+TypeScript 应用）。
+
+### 2.9 契约驱动双端生成
+```
+确认契约 JSON（parseContract 容忍围栏与前后废话）
+  ↓ 前后端【并行】生成，各自独立上下文，仅共享契约
+generateSide('frontend'|'backend')
+  ├─ 每端生成后立即跑质量闸门（2.10）
+  └─ 续写循环同样每轮跑闸门
+  ↓ 三方一致性校验（契约 / 前端 / 后端，零 token）
+渲染一致性报告（严重 / 中等 / 提示 分级）
+  ↓ 若存在 high 级不一致且开关未关 → autoAlignDual 定向修复
+按问题类型生成修复指令 → 重生成该端 → 重跑闸门 → 复校验
+（最多 DUAL_MAX_REPAIR_ROUND=2 轮；仍不过则保留报告交人工）
+```
+- 差异化：Coze/Dify 需用户自搭工作流；本平台以契约为单一基准，前后端**互不参考对方代码**，从根上避免"前端猜后端"。
+- 修复上下文控制：整段代码 ≤30000 字符时整段回传；超出则只挑与问题接口相关的代码块，其余明确要求保持不变。
+
+### 2.10 零 token 质量闸门
+```
+新代码块产出（extractCodeBlocks，带 start/end 绝对偏移）
+  ↓ 首次进入（含刷新后）→ backfillSymbols 回填历史块符号（只提取，不修改）
+  ↓ ① 静态校验 /api/static-check（零 token）
+  ├─ 语法错误 → buildFixPrompt 打回重生成 → 复校验，通过才采纳（≤N 次重试）
+  └─ 符号合并进符号表（按文件分桶）
+  ↓ ② 小模型审查 /api/review（消耗 token，前置静态过滤）
+  ├─ 后端已做静态预过滤：语法不过直接打回，不进模型
+  ├─ 超时 → 降级为「待批量复核」，返回 200 不阻塞生成
+  ├─ 连续异常 ≥N 段 → 自动降级为纯静态校验
+  └─ high 级问题 → applyFixes（按行号，重叠区间跳过）→ 复校验通过才写回
+  ↓ ③ 更新边界上下文（尾部 N 行）
+写回：按块偏移切片替换（replaceBlockAt + delta），避免相同内容块改错
+```
+- **铁律**：任何自动修复后必须复校验；修后仍有语法错则丢弃修复、保留原样。
+- **行号基准**：审查请求必须 `preCheck: false`——模型行号以**未压缩**代码为准（压缩会改变行号，导致修复落点错误）。
+- 只自动修 `high` 且非 `uncertain` 的问题；medium/low 仅提示。
+
+---
+
+## 3. 后端处理流程
+
+### 3.1 请求接收
+- 路由（**7 个**，v2.0 扩充）：
+  - `POST /api/chat`（SSE 流式）
+  - `POST /api/review`（JSON，增量代码审查）
+  - `POST /api/static-check`（JSON，零 token 静态校验，**不需 apiKey**）
+  - `POST /api/extract-api`（JSON，零 token 接口提取，**不需 apiKey**）
+  - `POST /api/consistency`（JSON，零 token 三方比对，**不需 apiKey**）
+  - `POST /api/test`（JSON）
+  - `GET /api/health`（健康检查）
+- 解析 JSON body，限制请求体总大小 ≤10MB（超限 → `INVALID_REQUEST`）。
+- **可选应用令牌**：配置了 `APP_TOKEN` 时，除 `/api/health` 外的 `/api/*` 必须带 `X-App-Token`；未配置则零影响（见 §7.7）。
+
+### 3.2 字段校验（顺序固定，先失败先返回）
+| 序 | 校验 | 失败码 |
+|---|---|---|
+| 1 | apiKey 非空且 `sk-` 前缀 | AUTH_FAILED |
+| 2 | model ∈ 白名单 | INVALID_MODEL |
+| 3 | messages 非空、role 合法、content 合法（string 或数组） | INVALID_REQUEST |
+| 4 | stream === true | INVALID_REQUEST |
+| 5 | temperature ∈ [0,2]（缺省 0.7） | INVALID_REQUEST |
+- 校验失败在**流式开始前**以 HTTP 状态码 + JSON `{code,message}` 返回。
+
+### 3.3 Prompt 拼接（后端唯一注入点）
+```
+requestMsgs = []
+if (body.systemPrompt 非空) requestMsgs.push({role:'system', content: systemPrompt})
+requestMsgs.push(...body.messages)
+```
+- 后端**只**注入用户自定义 systemPrompt。
+- 续写指令、文件 Prompt、测试 Prompt 均由前端在 messages 中处理，后端不感知、不追加。
+
+### 3.4 模型转发
+- 组装官方请求：`{ model, messages: requestMsgs, temperature, stream:true }`，Header 带 `Authorization: Bearer <apiKey>`。
+- 连接超时 30s；流式空闲 60s。
+
+### 3.5 流式标准化返回（核心转换）
+| 官方原生 | 后端输出事件 |
+|---|---|
+| `delta.reasoning_content` | `{type:"reasoning", data:"片段"}` |
+| `delta.content` | `{type:"content", data:"片段"}` |
+| `finish_reason` | `{type:"done", data:{finish_reason:"..."}}` |
+| 流中错误/断流/空闲超时 | `{type:"error", data:{code,message}}` |
+- 一旦 HTTP 200 + SSE 头已发出，**任何错误只能走 `type:error` 事件**，不得再改状态码。
+- 已发出过 chunk 后**禁止重试**（避免前端内容重复）。
+
+### 3.6 异常处理与重试（双通道）
+```
+流式前：HTTP 状态码 + JSON 错误体
+流式中：SSE type:error 事件
+重试：仅 UPSTREAM_ERROR / TIMEOUT，后端内部 ≤2 次，退避 1s→2s；
+      已发 chunk 不重试；401/403/400/429 不重试
+```
+
+### 3.7 接口契约（7 端点，v2.0 扩充）
+- `/api/chat` 请求体：`{ apiKey, model, messages, systemPrompt, temperature, stream }`
+- `/api/test` 请求体：`{ apiKey, model }` → 后端内部组 `{messages:[{role:'user',content:'hi'}], max_tokens:1, stream:false}` 探测，返回 `{ok, code?, message?}`。
+- `/api/review` 请求体：`{ apiKey, code, language, symbolTable, boundaryContext, preCheck, timeoutMs }`
+  - `preCheck` 必须为 **`false`**（前端不传即后端默认 true，是已知事故源）——模型返回的行号以**未压缩**代码为准，前端 `applyFixes` 按行号写回原始代码；若后端压缩后送模型，行号将相对压缩代码产生漂移（见 §5.6）。
+  - 后端静态预过滤：语法不过直接打回，不进入模型；超时 → 降级为「待批量复核」，返回 200 不阻塞生成。
+- `/api/static-check` 请求体：`{ code, language, globalSymbols, compress }`，**不需 apiKey**
+  - Tree-sitter 本地计算：语法校验 + 符号提取（byFile 分桶）+ 跨文件导出同名冲突 + 可选压缩。
+  - 内存三道闸：语言白名单（21 种）、单 wasm ≤3MB、RSS 水位 320MB 拒绝加载新语言；LRU 上限 3 个语言常驻。
+- `/api/extract-api` 请求体：`{ code, language, side }`（side = `frontend` \| `backend`），**不需 apiKey**
+  - 前端调用侧提取：fetch/axios 的 method + URL；后端路由定义侧提取：app.get/APIRouter 等。
+  - URL 归一化：`:id` / `${id}` / `{id}` / 末尾斜杠统一为 `{param}`；挂载前缀与 baseURL 拼接；后缀容错 + 保序子序列兜底两级前缀。
+- `/api/consistency` 请求体：`{ contract, frontend, backend }`，**不需 apiKey**
+  - 三方比对（契约 / 前端 / 后端），输出严重 / 中等 / 提示分级报告。
+- 错误体：`{ code, message }`，message 为中文简述，前端按 code 映射最终文案，不直接展示 message。
+
+---
+
+## 4. Prompt 体系落地规则（4 类）
+
+| Prompt | 作用 | 触发时机 | 拼接顺序/注入位置 | 生效范围 | 归属 |
+|---|---|---|---|---|---|
+| 用户自定义系统提示词 | 全局人设/规则 | 每次请求 | 注入 messages 最前（`{role:'system'}`） | 单次会话所有请求 | 前端存字段，后端注入 |
+| 长代码续写 Prompt | 续写指令 | 续写循环每轮 | 作为新 `{role:'user'}` 追加到 messages 末尾 | 仅续写轮 | 前端注入，后端透传 |
+| 代码文件上传 Prompt | 引导分析/优化/补全 | 选文件时 | 填入输入框，用户确认后随消息发送 | 该条用户消息 | 前端 |
+| 连接测试 Prompt | 鉴权/连通探测 | 点「测试连接」 | 后端内部 `hi`，max_tokens=1，stream=false | 单次探测 | 后端 |
+
+### 4.1 系统提示词原文规则
+- 默认空；placeholder：“输入全局系统提示词，例如：你是资深前端工程师，回答简洁专业，优先给出可运行代码示例”。
+- 空则不注入 system 消息。
+
+### 4.2 续写指令原文（硬编码，不可改）
+`直接续写剩余代码，不重复前文、不额外解释`
+- 续写请求会带上**整个历史对话**再追加该指令。
+
+### 4.3 文件上传 Prompt 原文（硬编码，填入输入框）
+```
+帮我分析/优化/补全这段代码：
+```
+<文件内容>
+```
+```
+- 不直接发 API，由用户确认/修改后发送。
+
+### 4.4 测试 Prompt 原文
+`hi`，仅探测连通与鉴权。
+
+---
+
+## 5. 长代码续写机制
+
+### 5.1 触发判定 shouldContinue（finish_reason 优先，启发式兜底）
+```
+shouldContinue(result, content):
+  1. mode !== 'longcode' → false
+  2. result.finish_reason === 'length' → true（权威信号，模型撞上 max_tokens，必然截断）
+  3. result.finish_reason === 'stop' 且启发式不触发 → false（模型自认为说完）
+  4. finish_reason 缺失（旧版/异常）时退回启发式三条件：
+     ├─ 长度 ≥ 300
+     ├─ 含 ```
+     └─ 末尾不是 `;` `}` `]` `)` `` ` `` 之一
+     全满足 → true，否则 false
+```
+- **v2.0 修正**：v1.0 的纯三条件启发式有「该续不续 / 不该续乱续」双误判（模型正常收尾 `}` 结尾仍触发续写，无谓烧 token；真截断时恰好 `}` 结尾反而不续）；`finish_reason` 是上游权威信号，优先采信。
+- 仅当 `mode==='longcode'` 且判定为 true 才进入循环。
+- 观测埋点：请求带 `stream_options.include_usage`，前端累计 token 用量评估续写成本（全量重发历史 → 单轮 token 随轮次 O(n²) 增长）。
+
+### 5.2 循环上限
+`MAX_CONTINUE = 10`（v2.0 修正，v1.0 为 5），即 1 次原始 + 最多 10 次续写 = 最多 11 次请求。
+- 达上限仍判定续写 → 提示「⚠️ 续写次数已达上限」并停止。
+
+### 5.3 续写指令注入方式
+每轮前端组装：`[system(若有), ...conv.messages(含已拼接的 assistant), {role:'user', content:'直接续写剩余代码...'}]` → 发后端 → 后端透传官方。
+
+### 5.4 内容拼接规则
+```
+last.content  += '\n' + c.content
+last.reasoning = (last.reasoning||'') + c.reasoning
+```
+- 拼接对象始终是最后一条 assistant 消息；每轮渲染一次 + saveAll。
+
+### 5.5 状态机
+```
+原始回复完成
+  ↓ shouldContinue?
+  ├─ 否 → 正常结束
+  └─ 是 → 轮次 r=1..10
+        发续写请求 → 收到 c → 拼接 → 渲染+保存
+        ├─ 用户停止 → 中断，保留已拼接，提示「⏹ 已停止续写」
+        ├─ 请求出错 → 中断，保留已拼接，按错误码提示，不自动重试续写
+        ├─ shouldContinue(c)=false → 提前结束，提示「✅ 长代码生成完成」
+        └─ r==10 仍 true → 达上限，提示「⚠️ 续写次数已达上限」
+```
+- 退出提示三态：完成 / 上限 / 中断（停止或错误）。
+- 后端全程无感，每轮视为独立普通请求。
+
+### 5.6 审查行号基准（v2.0 铁律）
+- 调用 `/api/review` 必须传 `preCheck: false`。
+- 原因链：后端 `preCheck:true`（默认）会先把代码压缩再送模型 → 模型看到的行号是**压缩后代码**的行号 → 模型返回的问题行号与修复建议按压缩坐标描述 → 前端 `applyFixes` 按这些行号去切**原始代码** → 落点漂移，且复校验只查语法（语法合法 ≠ 修改位置正确）→ 错误修复被静默采纳。
+- 附带收益：`preCheck:false` 后前后端不重复静态校验（前端 2.10 闸门已先跑过一遍），省一次本地计算。
+- 若后端确需压缩（超长代码降 token），必须返回**行号映射表**，由前端换算后再应用；当前实现选择不压缩，以原始坐标为唯一基准。
+
+---
+
+## 6. 数据逻辑结构
+
+### 6.1 localStorage 键规范
+| 键 | 类型 | 内容 |
+|---|---|---|
+| `conversations` | Array | 所有会话 |
+| `currentConvId` | String | 当前激活会话 id |
+| `config` | Object | 全局配置 |
+
+### 6.2 会话结构
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| id | string | 唯一 id |
+| title | string | 默认“新对话”，首条用户消息前 20 字更新 |
+| messages | Array | 消息列表 |
+| createdAt | number | 时间戳 |
+| updatedAt | number | 每次变更更新 |
+
+### 6.3 消息结构
+| 字段 | 类型 | 说明 |
+|---|---|---|
+| role | 'user'\|'assistant' | 角色 |
+| content | string \| Array | 纯文本或 multimodal 数组 |
+| reasoning | string? | 助手思考链（仅 assistant） |
+| createdAt | number | 时间戳 |
+| images | Array? | 用户图片元数据（base64 或 url） |
+| isDual | boolean? | **v2.0 新增**：契约驱动双端生成的结构化消息（契约面板 / 生成进度） |
+| isReport | boolean? | **v2.0 新增**：零 token 校验报告消息（静态校验 / 一致性报告，非模型产出） |
+| isContract | boolean? | **v2.0 新增**：需求工作流的契约 JSON 消息（用户可编辑，是双端生成唯一基准） |
+- multimodal content 数组项：`{type:'text',text}` / `{type:'image_url',image_url:{url}}`。
+- 三类结构化标记消息与普通对话消息**同库存储**，发送请求时按 `toRequestMessages()` 过滤（`isReport` 等不进入模型上下文，见 2.7 / 7.7）。
+
+### 6.4 配置结构
+| 字段 | 类型 | 默认 | 说明 |
+|---|---|---|---|
+| apiKey | string | '' | 前端持有 |
+| model | string | deepseek-chat | 白名单内 |
+| mode | 'normal'\|'longcode' | normal | 续写开关 |
+| temperature | number | 0.7 | 0–2 |
+| systemPrompt | string | '' | 全局人设 |
+| apiBase | string | 后端地址 | 前端→后端基址 |
+| appToken | string? | '' | **v2.0 新增**：应用令牌，非空时随请求带 `X-App-Token` 头（与后端 APP_TOKEN 配对） |
+| quality | object? | — | **v2.0 新增**：质量闸门配置——闸门开关 / 审查开关 / 降级态 / 符号表（byFile 分桶）/ 已处理指纹集 |
+| dualAutoRepair | boolean? | true | **v2.0 新增**：一致性 high 问题是否自动定向修复 |
+| req | object? | — | **v2.0 新增**：需求工作流配置（阶段一/阶段二模型与温度等） |
+
+### 6.5 流转规则
+- 用户输入 → user 消息入列 → 发请求 → assistant 消息入列（含 reasoning）→ 续写则拼接回同一条 assistant → 全量 saveAll。
+- 编辑/重生成 → 截断该条及之后 → 重发。
+- 切换会话 → 仅换 currentConvId，不复制数据。
+- 删除会话 → splice，必要时切 conversations[0]。
+
+---
+
+## 7. 质量与容错规则
+
+### 7.1 重试策略（后端唯一）
+| code | 后端重试 | 次数 | 退避 | 前端 |
+|---|---|---|---|---|
+| UPSTREAM_ERROR | 是 | ≤2 | 1s→2s | 不重试 |
+| TIMEOUT | 是 | ≤2 | 1s→2s | 不重试 |
+| AUTH_FAILED / INVALID_MODEL / INVALID_REQUEST / RATE_LIMIT / UNKNOWN | 否 | — | — | 不重试 |
+- 已发 chunk 后禁止重试；请求放大上限 = 用户 1 次 → 官方最多 3 次。
+
+### 7.2 超时机制
+| 看门狗 | 位置 | 阈值 | 行为 |
+|---|---|---|---|
+| 连接超时 | 后端 | 30s | 计入 TIMEOUT 重试预算 |
+| 流式空闲 | 后端 | 60s | 发 type:error 并关流 |
+| 连接兜底 | 前端 | 30s | abort |
+| 空闲兜底 | 前端 | 60s | abort + 标记超时，不自动重试 |
+
+### 7.3 错误分类（最终七码，双通道）
+| code | HTTP | 触发 | 重试 |
+|---|---|---|---|
+| AUTH_FAILED | 401 | key 空/格式错/上游 401/403 | 否 |
+| INVALID_MODEL | 400 | model 非白名单 | 否 |
+| INVALID_REQUEST | 400 | messages/stream/temp/请求体>10MB/多模态非法 | 否 |
+| RATE_LIMIT | 429 | 上游 429 | 否 |
+| UPSTREAM_ERROR | 502 | 上游 5xx/解析失败/连接重置 | 是 |
+| TIMEOUT | 504 | 连接/空闲超时 | 是 |
+| UNKNOWN | 500 | 未分类/后端 bug | 否 |
+- 流式前用 HTTP+JSON；流式中只用 SSE `type:error`。
+
+### 7.4 前端文案映射
+AUTH_FAILED→🔑 Key 无效；INVALID_MODEL→⚙️ 模型不支持；INVALID_REQUEST→📝 内容不合法；RATE_LIMIT→⏳ 请求过频；UPSTREAM_ERROR→🛠️ 服务暂不可用已重试；TIMEOUT→⏱️ 超时已重试可重生成；UNKNOWN→❗ 未知错误。
+
+### 7.5 输出质量校验标准
+| 项 | 标准 |
+|---|---|
+| 完整性 | 流式结束必须收到 `done` 或 `error`，不得静默截断 |
+| 渲染安全 | 所有模型输出经 DOMPurify 净化后再插入 DOM |
+| 代码块 | 高亮在 `replaceWith` 结构化阶段执行，避免流式期重复高亮 |
+| 续写一致性 | 拼接后 content 与 reasoning 必须同步落库，刷新不丢 |
+| 空回复 | content 为空且无 reasoning → 视为 UPSTREAM_ERROR 提示 |
+| 多模态 | 图片 base64 仅存会话，不进 config；复制时仅取 text 项 |
+
+### 7.6 联调对齐 checklist（高风险点）
+1. 续写轮 messages 后端**原样转发**，不追加任何指令。
+2. 流式中 `type:error` 到达时前端**保留已渲染内容**并追加提示，不清空。
+3. 已发 chunk 后后端**不得**重试（防前端重复）。
+4. systemPrompt 仅后端注入，前端不重复拼 system。
+5. 图片/请求体大小双层校验：前端体验（≤4MB/张、≤5 张）、后端安全（总 ≤10MB）。
+
+### 7.7 安全边界（v2.0 新增）
+| 措施 | 范围 | 行为 |
+|---|---|---|
+| 应用令牌 `APP_TOKEN` | 后端环境变量，可选 | 配置后除 `/api/health` 外所有 `/api/*` 必须带 `X-App-Token` 头，否则拒绝；**未配置时零影响**（不改变默认部署行为） |
+| static-check 并发闸 | `/api/static-check` | 最多 `MAX_STATIC_CONCURRENCY=3` 个并发，超限返回 HTTP 429 + `RATE_LIMIT`（Tree-sitter wasm 是 CPU/内存密集操作，防并发打爆） |
+| CORS | 后端 | 默认 `ALLOWED_ORIGIN` 生产必须显式配置白名单；放行 `X-App-Token` 自定义头 |
+| apiKey 边界 | 后端 | 不存储、不写日志、不写环境变量（沿用 0.3 裁决） |
+| 路径净化 | static-check | `sanitizePath` 防目录穿越（语言/文件路径仅作白名单匹配，不落盘） |
+| 已知待补 | 部署层 | Nginx 层限流（按 IP + 端点）尚未配置，属部署清单事项，非代码缺陷 |
+- 令牌配对：前端 `config.appToken` 非空 → `apiHeaders()` 自动附加 `X-App-Token`；后端未配置 `APP_TOKEN` 时忽略该头。
+
+---
+
+## 8. 验收边界
+
+| 角色 | 验收重点 |
+|---|---|
+| 豆包（前端） | 续写状态机、流式→结构化替换、localStorage 一致性、消息操作矩阵、停止/中断保留内容、需求工作流两阶段交互、契约驱动双端编排、质量闸门接入（每轮） |
+| DeepSeek（后端） | 双通道错误、标准化转换完整性、重试预算、已发 chunk 不重试、无状态不缓存、零 token 端点正确性（static-check/extract-api/consistency）、Tree-sitter 内存三道闸、并发闸 429 |
+| 双方 | 契约驱动三方一致性闭环（≤2 轮修复）、77 测试全绿、`preCheck:false` 行号基准 |
+
+**精力分配建议**：前端 ~65%，后端 ~35%（前端宽而杂，后端窄而深）。
+
+---
+
+## 9. 模块结构与测试（v2.0 新增）
+
+### 9.1 模块结构
+```
+deploy-pkg/
+├─ web/
+│  ├─ index.html        前端 SPA（单文件，~199KB：交互/状态/渲染/持久化/续写循环/闸门编排）
+│  ├─ quality-text.mjs  纯函数层①：代码块提取（start/end 偏移）/ 偏移写回 / applyFixes /
+│  │                    符号表合并（byFile 分桶）/ 契约解析 / 路径净化
+│  └─ dual-text.mjs     纯函数层②：契约定向修复上下文挑选 / 修复 Prompt / 一致性报告渲染
+└─ deepseek-proxy/
+   ├─ server.js         Fastify 入口：7 路由 / 双通道错误 / 重试 / APP_TOKEN / 并发闸
+   └─ lib/
+      ├─ validate.js        字段校验（顺序固定）
+      ├─ errors.js          错误码定义与响应
+      ├─ deepseek.js        官方 API 对接
+      ├─ sse.js             SSE 标准化
+      ├─ static-check.js    Tree-sitter 静态校验（语法/符号/冲突/压缩 + 内存三道闸）
+      ├─ api-contract.js    接口提取与三方一致性比对（零 token）
+      └─ review.js          增量代码审查 Prompt 组装与输出归一化
+```
+
+### 9.2 单一事实来源原则
+- `quality-text.mjs` / `dual-text.mjs` 同时被**浏览器**（`window.QT` / `window.DT`）与 **Node 测试**（`import`）加载——同一份代码，两端运行，杜绝"测试过的和生产用的不是同一实现"。
+- 纯函数层不碰 DOM、不碰网络，只做数据变换；所有 IO 编排留在 `index.html` 与 `server.js`。
+
+### 9.3 测试套件
+| 文件 | 用例数 | 覆盖 |
+|---|---|---|
+| `_deploy/tests/text-ops.test.mjs` | 53 | 代码块提取与偏移写回（CRLF/多次替换 delta/无偏移退化/内容未变）、applyFixes（重叠跳过/坐标平移）、符号表 byFile 分桶与跨文件冲突、契约解析容错、路径净化 |
+| `_deploy/tests/dual-text.test.mjs` | 24 | 修复上下文挑选（>30000 字符裁剪）、修复 Prompt 组装、一致性报告分级渲染、修复轮次上限 |
+- 运行方式：`node --test _deploy/tests/<file>.test.mjs`（Node 22 需显式指定文件，传目录会误把目录当模块）。
+- 当前状态：77 用例全部通过。
+- 新增规则：任何对纯函数层的修改必须先补/改用例，跑通后再合入（闸门自身的代码也过闸门）。
+
+---
+
+## 方案生效声明
+
+本总方案 v2.0 已同步代码实际状态，覆盖 10 大前端工作流、7 端点后端链路、4 类 Prompt、续写机制（finish_reason 优先 + 10 轮上限）、数据结构、质量容错、安全边界与测试体系。豆包与 DeepSeek 据此实现时，**不得增删错误码、不得改变重试归属、不得修改 Prompt 原文、不得引入数据库或大型框架**；审查请求必须 `preCheck:false`（§5.6 铁律）；任何自动修复后必须复校验（§2.10 铁律）。如实现中发现与本方案冲突的早期局部表述，一律以本方案为准。

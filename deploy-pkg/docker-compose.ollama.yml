@@ -1,0 +1,56 @@
+# 连本机 Ollama 的 compose 示例（智能代码生成平台）
+#
+# 普通 docker-compose.yml 的后端在桥接网络里，容器内 localhost ≠ 宿主机，
+# 因此连不到宿主机上跑的 Ollama（http://localhost:11434）。
+# 本示例通过 extra_hosts 把「宿主机」暴露给后端容器
+#（host.docker.internal → 宿主机网关），后端即可用
+#   http://host.docker.internal:11434/v1
+# 访问本机 Ollama；同时保留标准桥接网络（不占宿主机 80 端口、web→backend 仍走服务名）。
+#
+# 用法：
+#   cd deploy-pkg
+#   docker compose -f docker-compose.ollama.yml up -d
+# 然后在界面里选「Ollama（本地）」供应商，并把上游地址填为：
+#   http://host.docker.internal:11434/v1
+#
+# ⚠ 仅单人自托管时这样连本机 Ollama；公网 / 多用户实例请勿开 ALLOW_LOCAL_TARGETS。
+#
+# 想用真正的 host 网络模式？把 web 与 backend 都加 network_mode: host 即可
+#（代价：直接占用宿主机 80 与 8787 端口，且 web→backend 要走 127.0.0.1）。
+
+services:
+  backend:
+    build:
+      context: ./deepseek-proxy
+      dockerfile: Dockerfile
+    image: longcode-backend:latest
+    restart: unless-stopped
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "8787"
+      DEEPSEEK_API_BASE: "https://api.deepseek.com"
+      LC_MULTI_MODEL: "1"
+      ALLOW_LOCAL_TARGETS: "1"   # 允许后端访问本地 / 内网地址（连 Ollama 必需）
+      ALLOWED_ORIGIN: ""
+      LOG_LEVEL: "info"
+    # 把宿主机暴露给后端容器，使其能访问本机 Ollama
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    expose:
+      - "8787"
+    volumes:
+      - proxy_data:/app/data
+
+  web:
+    build:
+      context: ./web
+      dockerfile: Dockerfile
+    image: longcode-web:latest
+    restart: unless-stopped
+    depends_on:
+      - backend
+    ports:
+      - "8080:80"
+
+volumes:
+  proxy_data:
