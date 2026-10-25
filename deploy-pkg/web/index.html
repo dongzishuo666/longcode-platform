@@ -1376,7 +1376,47 @@
             background: var(--bg-hover);
         }
 
-        /* 系统提示词弹窗 */
+        /* ===== 修复记录弹窗（2026-10-25 第 2 步）===== */
+        /* 注意：这段必须放在"系统提示词弹窗"那条规则【之前】，否则会被塞进它的
+           声明区里（本轮踩过：注入时选择器和注释粘成了一行，导致整张样式表解析失败，
+           jsdom 直接报 Could not parse CSS stylesheet）。 */
+        .fixlog-modal {
+            position: fixed; left: 50%; top: 50%; transform: translate(-50%, -50%) scale(.96);
+            /* 不用 min()：jsdom 的 CSS 解析器不支持整个函数，会让整张样式表解析失败 */
+            width: 760px; max-width: 92vw; max-height: 76vh; z-index: 120;
+            display: none; flex-direction: column;
+            background: var(--bg-secondary); border: 1px solid var(--border-strong);
+            border-radius: var(--radius-lg); box-shadow: var(--shadow-lg); padding: 18px;
+        }
+        .fixlog-modal.active { display: flex; }
+        .fixlog-hint { font-size: 12.5px; color: var(--text-muted); margin: 6px 0 12px; line-height: 1.6; }
+        .fixlog-list { flex: 1; overflow-y: auto; margin-bottom: 12px; }
+        .fixlog-empty { padding: 24px; text-align: center; color: var(--text-muted); font-size: 13px; }
+        .fixlog-item {
+            border: 1px solid var(--border-color); border-radius: var(--radius-sm);
+            padding: 10px 12px; margin-bottom: 8px; background: var(--bg-tertiary);
+        }
+        .fixlog-meta { font-size: 12px; color: var(--text-muted); margin-bottom: 6px; display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+        .fixlog-tag {
+            font-size: 11px; padding: 1px 7px; border-radius: var(--radius-pill);
+            border: 1px solid var(--accent-line); color: var(--accent-color);
+        }
+        .fixlog-tag.warn { border-color: var(--error-line); color: var(--error-color); }
+        .fixlog-code {
+            font-family: ui-monospace, SFMono-Regular, Consolas, monospace; font-size: 12px;
+            background: var(--code-bg); border-radius: var(--radius-sm); padding: 8px 10px;
+            white-space: pre-wrap; word-break: break-word; max-height: 150px; overflow: auto;
+        }
+        .fixlog-code .del { color: var(--error-color); }
+        .fixlog-code .add { color: var(--success-color); }
+        .fixlog-actions { margin-top: 8px; display: flex; gap: 8px; }
+        .fixlog-actions button {
+            font-size: 12px; padding: 3px 10px; border-radius: var(--radius-sm);
+            border: 1px solid var(--border-color); background: var(--bg-input);
+            color: var(--text-secondary); cursor: pointer;
+        }
+        .fixlog-actions button:hover { border-color: var(--accent-color); color: var(--accent-color); }
+
         .system-prompt-modal {
             position: fixed;
             top: 50%;
@@ -2506,6 +2546,19 @@
                     <button class="config-item tool-btn" id="dualRepairBtn" title="契约一致性校验发现严重不一致时，自动定向修复对应端（最多 2 轮，会消耗额外 token）">
                         <span class="btn-line">🔗 自动</span><span class="btn-line">对齐</span>
                     </button>
+                    <!-- 预览修复（2026-10-25 第 2 步）：开启后自动修正不直接写回，
+                         只登记为「待确认」，在修复记录里逐条应用 -->
+                    <button class="config-item tool-btn off" id="fixPreviewBtn" title="开启后，自动修正只登记不写回；在「修复记录」里逐条确认应用">
+                        <span class="btn-line">👁 预览</span><span class="btn-line">修复</span>
+                    </button>
+                    <!-- 修复记录：有记录时才显示，点开可逐条回滚 -->
+                    <button class="config-item tool-btn" id="fixLogBtn" title="查看自动修正记录，可逐条回滚（改动前的内容会完整还原）" style="display:none">
+                        <span class="btn-line">🔧 修复</span><span class="btn-line">记录</span>
+                    </button>
+                    <!-- 挂载项目（2026-10-25 第 2 步）：把历史会话的符号表/契约/改动记录挂到当前会话 -->
+                    <button class="config-item tool-btn off" id="mountBtn" title="把一个历史会话的项目资产（符号表/契约/改动记录）挂到当前会话">
+                        <span class="btn-line">📦 项目</span><span class="btn-line">挂载</span>
+                    </button>
                     <button class="config-item tool-btn" id="securityBtn" title="生成代码时默认追加安全基线规范（输入校验 / 注入防护 / CORS 收敛 / 密钥不硬编码等）">
                         <span class="btn-line">🔒 安全</span><span class="btn-line">基线</span>
                     </button>
@@ -2536,6 +2589,27 @@
         <div class="modal-actions">
             <button class="modal-btn" id="cancelPromptBtn">取消</button>
             <button class="modal-btn primary" id="savePromptBtn">保存</button>
+        </div>
+    </div>
+
+    <!-- 修复记录弹窗（2026-10-25 第 2 步）：自动修正可审计 / 可逐条回滚 -->
+    <div class="fixlog-modal" id="fixLogModal">
+        <div class="modal-title">修复记录</div>
+        <div class="fixlog-hint">自动修正会记在这里。回滚会把改动前的内容完整还原；改不回去时会明确说明原因，不会瞎改。</div>
+        <div class="fixlog-list" id="fixLogList"></div>
+        <div class="modal-actions">
+            <button class="modal-btn" id="fixLogCloseBtn">关闭</button>
+            <button class="modal-btn" id="fixLogRevertAllBtn">全部回滚</button>
+        </div>
+    </div>
+
+    <!-- 挂载项目弹窗（2026-10-25 第 2 步）：复用修复记录弹窗的样式，不新增 CSS -->
+    <div class="fixlog-modal" id="mountModal">
+        <div class="modal-title">挂载项目</div>
+        <div class="fixlog-hint">把一个历史会话的资产挂到当前会话：符号表（知道有哪些文件和函数）、契约（一致性校验的基准）、改动记录（之前踩过的坑）。只挂载摘要，不复制代码全文。</div>
+        <div class="fixlog-list" id="mountList"></div>
+        <div class="modal-actions">
+            <button class="modal-btn" id="mountCloseBtn">关闭</button>
         </div>
     </div>
 
@@ -2665,7 +2739,9 @@
             memories: '',
             // 最近一次契约一致性校验结果（记忆面板「从校验导入」的数据源）
             lastConsistency: null,
-            config: {               // 配置项
+            config: {
+      // 预览修复（2026-10-25）：开启后自动修正不写回，只登记待确认
+      previewFixes: false,               // 配置项
                 apiKey: '',
                 apiBase: '/api',     // 【前端 → 后端代理】同源部署（Nginx 反代 /api/ → 127.0.0.1:8787）
                 // 2026-10-24 多模型接入：供应商 / 模型 / 上游地址都由用户选。
@@ -2706,7 +2782,10 @@
                 // 早期是全局扁平表，跨文件同名一律误报「可能覆盖已有实现」。
                 symbols: { byFile: {}, exports: new Set() },
                 lastBoundary: '',       // 上一段尾部，作为下一段的边界上下文
-                stats: { checked: 0, fixed: 0, blocked: 0, issues: 0 }
+  // 自动修正记录（2026-10-25 第 2 步）：每条含 before/after 与状态，
+  // 用于「修复记录」弹窗的逐条回滚 / 预览模式下的逐条应用。
+  fixLog: [],
+                stats: { checked: 0, fixed: 0, blocked: 0, issues: 0, skipped: 0, discarded: 0, ineffective: 0 }
             },
             workflow: {             // 需求工作流状态
                 stage: 'idle',      // idle | contract | analyzing | review | generating
@@ -3381,6 +3460,16 @@
             qualityBtn: document.getElementById('qualityBtn'),
             qualityReviewBtn: document.getElementById('qualityReviewBtn'),
             dualRepairBtn: document.getElementById('dualRepairBtn'),
+            mountBtn: document.getElementById('mountBtn'),
+            mountModal: document.getElementById('mountModal'),
+            mountList: document.getElementById('mountList'),
+            mountCloseBtn: document.getElementById('mountCloseBtn'),
+            fixPreviewBtn: document.getElementById('fixPreviewBtn'),
+            fixLogBtn: document.getElementById('fixLogBtn'),
+            fixLogModal: document.getElementById('fixLogModal'),
+            fixLogList: document.getElementById('fixLogList'),
+            fixLogCloseBtn: document.getElementById('fixLogCloseBtn'),
+            fixLogRevertAllBtn: document.getElementById('fixLogRevertAllBtn'),
             securityBtn: document.getElementById('securityBtn'),
 
             // ---------- 结构化需求三层输入 ----------
@@ -3618,9 +3707,120 @@
             return MODEL_ALIAS_MAP[key.toLowerCase()] || key;
         }
 
+        /* ==================== 项目资产持久化（2026-10-25 第 1 步） ====================
+         * 背景：state.quality（符号表/边界/修复记录）与 state.workflow（契约/需求/方案）
+         * 此前只活在内存里 —— 切换会话会被 resetQuality() 清掉，刷新页面直接全丢。
+         * 结果是"一个标签页 = 一个项目"，关掉就从头再来。
+         *
+         * 现在按会话保存这两块资产，切会话时恢复，而不是丢弃。
+         * 注意两个 Set 不能 JSON 序列化（processed / symbols.exports），要显式转换。
+         */
+
+        /** 每个会话最多保留多少条修复记录（before/after 很占地方） */
+        const FIXLOG_PER_CONV = 60;
+        /**
+         * 会话资产的总体积上限。
+         * localStorage 通常 5MB/域，超了 setItem 直接抛 QuotaExceededError（静默丢失全部保存）。
+         * 实测：12 个带大契约的会话就能写到 7MB 直接崩。
+         * 这里留足消息的空间：资产 2.0MB 封顶（消息还能用 ~3MB）。
+         */
+        const CONV_ASSET_BUDGET = 2.0 * 1024 * 1024;
+
+        function serializeQuality(q) {
+            if (!q) return null;
+            return {
+                symbols: {
+                    byFile: (q.symbols && q.symbols.byFile) || {},
+                    exports: Array.from((q.symbols && q.symbols.exports) || []),
+                },
+                lastBoundary: q.lastBoundary || '',
+                backfilled: !!q.backfilled,
+                fixLog: (q.fixLog || []).slice(-FIXLOG_PER_CONV),
+                stats: { ...(q.stats || {}) },
+                // 挂载的项目包（第 2 步）：只含摘要与定位，不含代码全文
+                project: q.project || null,
+            };
+        }
+
+        /** 把保存的数据灌回运行态；data 为空即"干净的新项目" */
+        function hydrateQuality(data) {
+            resetQuality();
+            if (!data || typeof data !== 'object') return;
+            const s = data.symbols || {};
+            state.quality.symbols = {
+                byFile: (s.byFile && typeof s.byFile === 'object') ? s.byFile : {},
+                exports: new Set(Array.isArray(s.exports) ? s.exports : []),
+            };
+            state.quality.lastBoundary = data.lastBoundary || '';
+            state.quality.backfilled = !!data.backfilled;
+            state.quality.fixLog = Array.isArray(data.fixLog) ? data.fixLog : [];
+            if (data.stats && typeof data.stats === 'object') {
+                Object.assign(state.quality.stats, data.stats);
+            }
+            state.quality.project = data.project || null;
+            updateMountBtn();
+        }
+
+        function serializeWorkflow(w) {
+            if (!w) return null;
+            return {
+                stage: w.stage || 'idle',
+                requirement: w.requirement || '',
+                plan: w.plan || '',
+                spec: w.spec || null,
+                contract: w.contract || null,
+                contractText: w.contractText || '',
+            };
+        }
+
+        /** 灌回 workflow；data 为空即清空（新项目不该继承上一个项目的契约） */
+        function hydrateWorkflow(data) {
+            const d = (data && typeof data === 'object') ? data : {};
+            // 必须走 setStage()：它是 stage 的唯一写入口（同时清/记 pipelineSeen 并刷新流水线 UI）。
+            // 直接赋值会让"恢复出来的会话"流水线仍显示空 —— 测试当场抓到了这个绕过。
+            setStage(d.stage || 'idle');
+            state.workflow.requirement = d.requirement || '';
+            state.workflow.plan = d.plan || '';
+            state.workflow.spec = d.spec || null;
+            state.workflow.contract = d.contract || null;
+            state.workflow.contractText = d.contractText || '';
+        }
+
+        /**
+         * 体积守卫：localStorage 撑爆会让"保存失败"变成静默的（catch 里只 console.error）。
+         * 策略：超预算时从【最旧】的会话开始丢资产（消息保留），并在控制台说明。
+         */
+        let assetPrunedWarned = false;
+        function fitConversationBudget() {
+            const list = state.conversations;
+            let json = JSON.stringify(list);
+            if (json.length <= CONV_ASSET_BUDGET) return json;
+            const copies = list.map(c => ({ ...c }));
+            for (let i = copies.length - 1; i >= 0 && json.length > CONV_ASSET_BUDGET; i--) {
+                if (copies[i].quality || copies[i].workflow) {
+                    delete copies[i].quality;
+                    delete copies[i].workflow;
+                    json = JSON.stringify(copies);
+                }
+            }
+            if (!assetPrunedWarned) {
+                assetPrunedWarned = true;
+                try {
+                    console.warn('[持久化] 会话资产超过体积预算，已丢弃最旧会话的符号表/契约（消息仍保留）');
+                } catch { }
+            }
+            return json;
+        }
+
         function saveAll() {
             try {
-                localStorage.setItem('conversations', JSON.stringify(state.conversations));
+                // 写盘前把"当前会话"的资产快照进去（否则切走/刷新就丢）
+                const _conv = getCurrentConv();
+                if (_conv) {
+                    _conv.quality = serializeQuality(state.quality);
+                    _conv.workflow = serializeWorkflow(state.workflow);
+                }
+                localStorage.setItem('conversations', fitConversationBudget());
                 localStorage.setItem('currentConvId', state.currentConvId || '');
                 localStorage.setItem('config', JSON.stringify(state.config));
                 localStorage.setItem('usage', JSON.stringify(state.usage));   // 全局 token 账本（数据中心）
@@ -3677,6 +3877,11 @@
                     if (!exists) {
                         state.currentConvId = state.conversations[0].id;
                     }
+                    // 2026-10-25 第 1 步：刷新页面后把当前会话的项目资产灌回来。
+                    // 不补这一步，资产虽然存下来了却不会回到运行态 —— 等于白存。
+                    const cur = getCurrentConv();
+                    hydrateQuality(cur && cur.quality);
+                    hydrateWorkflow(cur && cur.workflow);
                 }
 
                 // 同步配置到UI
@@ -3763,6 +3968,8 @@
             probeAppToken();
             probeCapabilities();   // 多模型界线：按后端能力决定是否显示供应商入口
             syncReqUI();
+            updateFixLogBtn();     // 修复记录按钮：有记录才显示；预览开关状态回填
+            updateMountBtn();      // 挂载按钮：已挂载项目才高亮
         }
 
         /**
@@ -3777,6 +3984,10 @@
             state.quality.degraded = false;
             state.quality.failStreak = 0;
             state.quality.backfilled = false;
+            // 修复记录属于"某个会话的某次改动"，换项目必须清空 ——
+            // 否则旧记录留在列表里，点回滚会作用到新会话的消息上（2026-10-25 修）
+            state.quality.fixLog = [];
+            state.quality.stats = { checked: 0, fixed: 0, blocked: 0, issues: 0, skipped: 0, discarded: 0, ineffective: 0 };
         }
 
         /** 质量闸门开关按钮的视觉状态（配置 → 按钮 + 运行时状态） */
@@ -3828,6 +4039,10 @@
             state.currentConvId = conv.id;
             state.continueCount = 0;
             resetQuality();
+            // 新会话 = 新项目：契约/需求/方案必须清空。
+            // 原来只 resetQuality()，workflow 留着上一个项目的契约 →
+            // 一致性校验会拿错基准（2026-10-25 修）。
+            hydrateWorkflow(null);
             // 只有用户主动点「新建对话」才清空需求草稿（opts.resetReq）。
             // 其余三个调用点都不能清：loadAll 的「无会话则新建」会毁掉刚从
             // localStorage 恢复的草稿；loadAll 异常兜底与删完最后一个会话后的
@@ -3844,7 +4059,12 @@
             if (state.isGenerating) return;
             state.currentConvId = id;
             state.continueCount = 0;
-            resetQuality();
+            // 2026-10-25 第 1 步：从"切走即清空"改为"切到哪个会话就恢复哪个会话的资产"。
+            // 原来这里 resetQuality() 一调，符号表/边界/修复记录全没了 ——
+            // 于是同一项目换个会话就得从头再来。
+            const _next = getCurrentConv();
+            hydrateQuality(_next && _next.quality);
+            hydrateWorkflow(_next && _next.workflow);
             hideStatus();
             renderConvList();
             renderMessages();
@@ -4288,6 +4508,8 @@
             return window.QT.replaceBlockAt(md, block, newCode, delta);
         }
         function applyFixes(code, issues) { return window.QT.applyFixes(code, issues); }
+        /** 带审计的修复：返回 {code, applied, skipped}（2026-10-25 锚定方案） */
+        function applyFixesEx(code, issues, opts) { return window.QT.applyFixesEx(code, issues, opts); }
         function blockKey(b) { return window.QT.blockKey(b); }
         function parseContract(text) { return window.QT.parseContract(text); }
         function slimContract(c, mode) { return window.QT.slimContract(c, mode); }
@@ -4646,6 +4868,415 @@
                 }
             }
             return Math.ceil(chars * 0.7);
+        }
+
+        /* ==================== 修复记录（2026-10-25 第 2 步） ====================
+         * 目标：自动修正不再"改完就没了"。每条修复记下 改前/改后 与定位方式，
+         * 用户可以逐条回滚；开启「预览修复」时则相反 —— 先登记、逐条确认应用。
+         *
+         * 关键技术点：定位仍然按【内容】而不是行号（沿用第 1 步的教训）——
+         * 回滚/应用时内容可能已被后续修复改动，行号早就不可信了。
+         */
+        let fixLogSeq = 0;
+
+        /** 记录一批修复。state: 'applied' | 'pending' */
+        function pushFixLog(items, meta) {
+            if (!items || !items.length) return;
+            const conv = getCurrentConv();
+            for (const it of items) {
+                state.quality.fixLog.push({
+                    id: ++fixLogSeq,
+                    convId: conv ? conv.id : null,
+                    blockKey: meta.blockKey || '',
+                    blockName: meta.blockName || '',
+                    mode: it.mode,
+                    start: it.start,
+                    end: it.end,
+                    claimedLine: it.claimedLine,
+                    before: it.before,
+                    after: it.after,
+                    desc: (it.issue && it.issue.description) || '',
+                    state: meta.state || 'applied',
+                    at: Date.now(),
+                });
+            }
+            // 只留最近 200 条，避免 localStorage 膨胀
+            if (state.quality.fixLog.length > 200) {
+                state.quality.fixLog = state.quality.fixLog.slice(-200);
+            }
+            updateFixLogBtn();
+        }
+
+        function updateFixLogBtn() {
+            if (!els.fixLogBtn) return;
+            const n = currentFixLog().filter(r => r.state === 'applied' || r.state === 'pending').length;
+            els.fixLogBtn.style.display = n ? '' : 'none';
+            // 只改 title 不改标签：标签若塞进动态数字，
+            // 英文模式下就再也匹配不到字典（i18n 是按文本精确映射的）。
+            els.fixLogBtn.title = n
+                ? `查看自动修正记录（${n} 条待确认/已应用），可逐条回滚`
+                : '查看自动修正记录';
+            if (els.fixPreviewBtn) els.fixPreviewBtn.classList.toggle('off', !state.config.previewFixes);
+        }
+
+        function openFixLog() {
+            renderFixLog();
+            if (els.fixLogModal) els.fixLogModal.classList.add('active');
+            if (els.modalOverlay) els.modalOverlay.classList.add('active');
+        }
+
+        function closeFixLog() {
+            if (els.fixLogModal) els.fixLogModal.classList.remove('active');
+            if (els.modalOverlay) els.modalOverlay.classList.remove('active');
+        }
+
+        /** 当前会话最后一条消息（修复都发生在它身上） */
+        function currentFixTarget() {
+            const conv = getCurrentConv();
+            if (!conv || !conv.messages || !conv.messages.length) return null;
+            return conv.messages[conv.messages.length - 1];
+        }
+
+        /** 当前会话的修复记录（记录里的 convId 才是归属，不能跨会话混用） */
+        function currentFixLog() {
+            const id = state.currentConvId || null;
+            return (state.quality.fixLog || []).filter(r => r && r.convId === id);
+        }
+
+        function renderFixLog() {
+            if (!els.fixLogList) return;
+            const rows = currentFixLog().slice().reverse();
+            if (!rows.length) {
+                els.fixLogList.innerHTML = '<div class="fixlog-empty">还没有修复记录</div>';
+                return;
+            }
+            els.fixLogList.innerHTML = rows.map(r => {
+                const stateText = r.state === 'applied' ? '已应用'
+                    : r.state === 'pending' ? '待确认'
+                    : r.state === 'reverted' ? '已回滚' : r.state;
+                const modeText = r.mode === 'anchor' ? '锚点定位' : '行号定位';
+                const warn = r.mode === 'line' ? '<span class="fixlog-tag warn">按行号（无锚点）</span>' : '';
+                const act = r.state === 'applied' ? '回滚'
+                    : r.state === 'pending' ? '应用'
+                    : r.state === 'reverted' ? '重新应用' : '';
+                const diff = '<div class="fixlog-code"><span class="del">- ' +
+                    escapeFixLog(r.before) + '</span>\n<span class="add">+ ' +
+                    escapeFixLog(r.after) + '</span></div>';
+                return '<div class="fixlog-item" data-id="' + r.id + '">'
+                    + '<div class="fixlog-meta">'
+                    + '<span class="fixlog-tag">' + stateText + '</span>'
+                    + (r.mode === 'anchor' ? '<span class="fixlog-tag">' + modeText + '</span>' : warn)
+                    + '<span>' + (r.blockName || '代码块') + '</span>'
+                    + '<span>第 ' + r.start + '–' + r.end + ' 行</span>'
+                    + (r.claimedLine && r.claimedLine !== r.start ? '<span>（模型原称第 ' + r.claimedLine + ' 行）</span>' : '')
+                    + '</div>'
+                    + (r.desc ? '<div class="fixlog-meta">' + escapeFixLog(r.desc) + '</div>' : '')
+                    + diff
+                    + '<div class="fixlog-actions"><button data-act="toggle" data-id="' + r.id + '">' + act + '</button></div>'
+                    + '</div>';
+            }).join('');
+        }
+
+        function escapeFixLog(s) {
+            return String(s == null ? '' : s)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+
+        /** 应用 / 回滚一条修复（两个方向都是"按内容换片段"） */
+        function toggleFix(id) {
+            const rec = state.quality.fixLog.find(r => r.id === id);
+            if (!rec) return;
+            // 记录属于某个会话，跨会话操作必然改错位置 → 直接拒绝
+            if (rec.convId !== (state.currentConvId || null)) {
+                showStatus('⚠️ 这条修复记录属于另一个会话，请切回原会话再操作', 'warning');
+                return;
+            }
+            const msg = currentFixTarget();
+            if (!msg) { showStatus('当前会话没有可修改的消息', 'warning'); return; }
+
+            const forward = rec.state !== 'applied';       // pending/reverted → 应用
+            const from = forward ? rec.before : rec.after;
+            const to = forward ? rec.after : rec.before;
+
+            const r = window.QT.swapSnippet(msg.content, from, to);
+            if (!r.ok) {
+                showStatus(
+                    r.reason === 'ambiguous'
+                        ? '⚠️ 这段代码在当前内容里出现多处，无法判断该改哪一处，请手工处理'
+                        : '⚠️ 没找到对应片段（后续可能又改动过），无法自动' + (forward ? '应用' : '回滚'),
+                    'warning'
+                );
+                return;
+            }
+            msg.content = r.text;
+            msg.updatedAt = Date.now();
+            rec.state = forward ? 'applied' : 'reverted';
+            if (forward) state.quality.stats.fixed++; else state.quality.stats.skipped += 0;
+            saveAll();
+            renderMessages();
+            renderFixLog();
+            updateFixLogBtn();
+            updateTokenInfo();
+            showStatus(forward ? '✅ 已应用该修复' : '↩️ 已回滚该修复', 'success');
+        }
+
+        /** 全部回滚（只回滚已应用的，倒序处理避免相互影响） */
+        function revertAllFixes() {
+            const applied = currentFixLog().filter(r => r.state === 'applied').slice().reverse();
+            if (!applied.length) { showStatus('没有可回滚的修复', 'warning'); return; }
+            const msg = currentFixTarget();
+            if (!msg) { showStatus('当前会话没有可修改的消息', 'warning'); return; }
+            let okCount = 0;
+            for (const rec of applied) {
+                const r = window.QT.swapSnippet(msg.content, rec.after, rec.before);
+                if (r.ok) { msg.content = r.text; rec.state = 'reverted'; okCount++; }
+            }
+            msg.updatedAt = Date.now();
+            saveAll();
+            renderMessages();
+            renderFixLog();
+            updateFixLogBtn();
+            showStatus(`↩️ 已回滚 ${okCount} 条修复` + (okCount < applied.length
+                ? `（${applied.length - okCount} 条找不到原片段，请手工核对）` : ''), okCount ? 'success' : 'warning');
+        }
+
+        /**
+         * 应用修复 + 三层验证（2026-10-25 第 3 步）。
+         *
+         *  ① 锚定定位（第 1 步）：按 issue.original 在附近找真实位置，找不到不修
+         *  ② 假修复检测（从双端移植）：归一化后内容没变 = 只重排/加注释 → 整体丢弃
+         *  ③ 规则复检：对能用规则判定的问题（空 catch / eval / SQL 拼接 / innerHTML /
+         *     CORS 通配 / 硬编码密钥 / 堆栈外泄 / rel）在修完后重跑同一条规则，
+         *     仍命中 → 这条修复没解决问题 → 剔除后**用剩下的重来一次**
+         *
+         * 语法复检（要调后端）留在调用方，因为这里要保持纯同步、可单测。
+         *
+         * @returns {{code:string|null, applied:Array, skipped:Array,
+         *            ineffective:Array, discarded:boolean}}
+         */
+        function applyVerifiedFixes(code, issues, opts) {
+            const first = applyFixesEx(code, issues, opts);
+            const empty = {
+                code: null, applied: [], skipped: first.skipped,
+                ineffective: [], discarded: false,
+            };
+            if (!first.applied.length) return empty;
+
+            // ② 假修复检测：内容实质没变（只重排 / 只加注释 / 只改 import 顺序）
+            try {
+                if (window.DT && typeof window.DT.isSubstantiveChange === 'function'
+                    && !window.DT.isSubstantiveChange(code, first.code)) {
+                    return { ...empty, discarded: true };
+                }
+            } catch { /* DT 未就绪就跳过这项检查，不阻塞修复 */ }
+
+            // ③ 规则复检：逐条看问题是否真的消失
+            const ineffective = [];
+            for (const a of first.applied) {
+                let v = null;
+                try { v = window.QT.verifyFix(first.code, a.issue); } catch { v = null; }
+                if (v && v.checkable && v.resolved === false) {
+                    ineffective.push({ issue: a.issue, rule: v.rule, label: v.label });
+                }
+            }
+            if (!ineffective.length) return { ...first, ineffective, discarded: false };
+
+            // 剔除"修了也没解决"的，用剩下的重新应用（一次即可，不做循环重试）
+            const bad = new Set(ineffective.map(x => x.issue));
+            const remaining = (issues || []).filter(i => !bad.has(i));
+            if (!remaining.length) return { ...empty, ineffective };
+
+            const second = applyFixesEx(code, remaining, opts);
+            if (!second.applied.length) return { ...empty, ineffective };
+            return { ...second, ineffective, discarded: false };
+        }
+
+        /* ==================== 挂载历史会话的项目（2026-10-25 第 2 步） ====================
+         * 场景：上个会话把商城项目的契约/符号表/改动记录都跑出来了，新会话想接着说
+         *      "在这个项目里加个优惠券"，而不是重新粘一遍代码。
+         *
+         * 挂载的是【资产】不是【代码全文】：
+         *   · 符号表 → 新会话知道有哪些文件/函数，避免重名与重复实现
+         *   · 契约   → 一致性校验有基准，新增接口能对上
+         *   · 修复决定 → 知道之前踩过哪些坑
+         *   · 文件摘要 + loc → 需要看具体代码时按位置去取（第 3 步）
+         * 体积上只多了几十 KB 摘要，远小于把代码全带上。
+         */
+
+        /** 会话 → 项目包的缓存（同一会话内容没变就不重复提取） */
+        const packCache = new Map();
+
+        function packOf(conv) {
+            if (!conv) return null;
+            const stamp = (conv.updatedAt || 0) + '|' + (conv.messages ? conv.messages.length : 0);
+            const hit = packCache.get(conv.id);
+            if (hit && hit.stamp === stamp) return hit.pack;
+            const pack = window.QT.buildProjectPack(conv);
+            packCache.set(conv.id, { stamp, pack });
+            return pack;
+        }
+
+        function updateMountBtn() {
+            if (!els.mountBtn) return;
+            const p = state.quality.project;
+            els.mountBtn.classList.toggle('off', !p);
+            els.mountBtn.title = p
+                ? `已挂载项目：${p.title || '未命名'}（点开可查看/更换）`
+                : '把一个历史会话的项目资产（符号表/契约/改动记录）挂到当前会话';
+        }
+
+        /** 合并符号表：同文件按名字去重追加，不整体覆盖（避免丢掉当前会话已有的） */
+        function mergeSymbolMap(into, from) {
+            let added = 0;
+            for (const [file, entries] of Object.entries(from || {})) {
+                if (!Array.isArray(entries)) continue;
+                const cur = Array.isArray(into[file]) ? into[file] : (into[file] = []);
+                const seen = new Set(cur.map(e => e && e.name).filter(Boolean));
+                for (const e of entries) {
+                    const n = e && e.name;
+                    if (!n || seen.has(n)) continue;
+                    cur.push(e);
+                    seen.add(n);
+                    added++;
+                }
+            }
+            return added;
+        }
+
+        /**
+         * 把某个历史会话的项目挂载到当前会话。
+         * 已有内容不覆盖 —— 契约/需求是"当前会话的事实"，挂载只能补空缺。
+         */
+        function mountProject(convId) {
+            const conv = state.conversations.find(c => c.id === convId);
+            if (!conv) return { ok: false, reason: 'not-found' };
+            if (convId === state.currentConvId) {
+                showStatus('不能挂载当前会话自身', 'warning');
+                return { ok: false, reason: 'self' };
+            }
+            const pack = packOf(conv);
+            const sum = window.QT.packSummary(pack);
+            if (sum.empty) {
+                showStatus('该会话还没有可挂载的资产（没有代码块、契约或符号）', 'warning');
+                return { ok: false, reason: 'empty' };
+            }
+
+            const added = mergeSymbolMap(state.quality.symbols.byFile, pack.symbols.byFile);
+            for (const x of (pack.symbols.exports || [])) state.quality.symbols.exports.add(x);
+
+            const skipped = [];
+            if (pack.contract && !state.workflow.contract) {
+                state.workflow.contract = pack.contract;
+                state.workflow.contractText = pack.contractText || '';
+                if (state.workflow.stage === 'idle') setStage('contract');
+            } else if (pack.contract) skipped.push('契约');
+            if (pack.requirement && !state.workflow.requirement) state.workflow.requirement = pack.requirement;
+            else if (pack.requirement) skipped.push('需求');
+            if (pack.spec && !state.workflow.spec) state.workflow.spec = pack.spec;
+            else if (pack.spec) skipped.push('结构化需求');
+
+            state.quality.project = pack;
+            saveAll();
+            updateMountBtn();
+            closeMount();
+
+            showStatus(
+                `📦 已挂载「${pack.title || '未命名项目'}」：${sum.files} 个代码块 · ${sum.symbolFiles} 个符号文件 · ${sum.decisions} 条改动记录`
+                + (added ? `（新增 ${added} 个符号）` : '')
+                + (skipped.length ? `；当前会话已有 ${skipped.join('/')}，未覆盖` : ''),
+                'success'
+            );
+            return { ok: true, added, skipped, pack };
+        }
+
+        /**
+         * 为本次提问准备"项目现有实现"（2026-10-25 第 3 步）。
+         *
+         * 为什么不用 systemPrompt 注入：
+         *   ① 后端 systemPrompt 硬限 4000 字符，代码会被截得没法看；
+         *   ② 传了 systemPrompt 会**覆盖**用户自定义的提示词（后端唯一注入点）。
+         * 所以走 messages：拼在"本次最后一条用户消息"后面，只影响这一轮请求，不写进历史。
+         */
+        function projectContextFor(conv, userText) {
+            const pack = state.quality.project;
+            if (!pack) return { text: '', files: [], dropped: [] };
+            const src = state.conversations.find(c => c.id === pack.projectId) || null;
+            if (!src) {
+                return { text: '', files: [], dropped: [{ name: '(来源会话已删除)', reason: 'msg-missing' }] };
+            }
+            return window.QT.buildProjectContext(src, pack, userText || '');
+        }
+
+        /** 把上下文追加到最后一条 user 消息（返回新数组，不改 conv） */
+        function withProjectContext(messages, ctxText) {
+            if (!ctxText) return messages;
+            const out = messages.slice();
+            for (let i = out.length - 1; i >= 0; i--) {
+                if (out[i] && out[i].role === 'user') {
+                    out[i] = { role: 'user', content: out[i].content + '\n\n' + ctxText };
+                    return out;
+                }
+            }
+            // 没有 user 消息（极少见）→ 单独补一条，保证上下文不丢
+            return [...out, { role: 'user', content: ctxText }];
+        }
+
+        function openMount() {
+            renderMountList();
+            if (els.mountModal) els.mountModal.classList.add('active');
+            if (els.modalOverlay) els.modalOverlay.classList.add('active');
+        }
+
+        function closeMount() {
+            if (els.mountModal) els.mountModal.classList.remove('active');
+            if (els.modalOverlay) els.modalOverlay.classList.remove('active');
+        }
+
+        function escMount(s) {
+            return String(s == null ? '' : s)
+                .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+        }
+
+        function renderMountList() {
+            if (!els.mountList) return;
+            const cur = state.quality.project;
+            const head = cur
+                ? `<div class="fixlog-item"><div class="fixlog-meta"><span class="fixlog-tag">已挂载</span>`
+                  + `<span>${escMount(cur.title || '未命名项目')}</span></div>`
+                  + `<div class="fixlog-meta">${(cur.files || []).length} 个代码块 · ${Object.keys((cur.symbols && cur.symbols.byFile) || {}).length} 个符号文件</div></div>`
+                : '<div class="fixlog-empty">当前会话还没挂载项目</div>';
+
+            const others = state.conversations.filter(c => c.id !== state.currentConvId);
+            if (!others.length) {
+                els.mountList.innerHTML = head + '<div class="fixlog-empty">没有其他会话可挂载</div>';
+                return;
+            }
+            const rows = others.slice(0, 30).map(c => {
+                const pack = packOf(c);
+                const s = window.QT.packSummary(pack);
+                const label = c.titleZh || c.title || c.titleEn || '未命名';
+                const meta = s.empty
+                    ? '<span>（无资产）</span>'
+                    : `<span>${s.files} 代码块</span><span>${s.symbolFiles} 符号文件</span>`
+                      + `${s.hasContract ? '<span class="fixlog-tag">有契约</span>' : ''}`
+                      + `${s.decisions ? `<span>${s.decisions} 条改动</span>` : ''}`;
+                return '<div class="fixlog-item">'
+                    + `<div class="fixlog-meta"><span>${escMount(label)}</span></div>`
+                    + `<div class="fixlog-meta">${meta}</div>`
+                    + '<div class="fixlog-actions">'
+                    + `<button data-mount="${escMount(c.id)}"${s.empty ? ' disabled' : ''}>挂载到此会话</button>`
+                    + '</div></div>';
+            }).join('');
+            els.mountList.innerHTML = head + rows;
+        }
+
+        function togglePreviewFixes() {
+            state.config.previewFixes = !state.config.previewFixes;
+            updateFixLogBtn();
+            saveAll();
+            showStatus(state.config.previewFixes
+                ? '👁 预览修复已开启：自动修正只登记，不直接改代码'
+                : '自动修正已恢复正常（直接改代码，可在修复记录里回滚）', 'info');
         }
 
         function updateTokenInfo() {
@@ -5505,7 +6136,26 @@
             updateSendBtnState();
 
             // 首次请求（过滤一致性报告等非对话消息）
-            const result = await streamRequest(toRequestMessages(conv));
+            // 第 3 步：把与本次提问相关的**现有实现**一起发过去
+            // （没挂载项目、或一个文件都没命中时，行为与以前完全一致）
+            const _lastUserText = (() => {
+                const us = conv.messages.filter(m => m && m.role === 'user');
+                return us.length ? String(us[us.length - 1].content || '') : '';
+            })();
+            const _pctx = projectContextFor(conv, _lastUserText);
+            let _reqMsgs = toRequestMessages(conv);
+            if (_pctx.text) {
+                _reqMsgs = withProjectContext(_reqMsgs, _pctx.text);
+                showStatus(
+                    `📦 本次附带 ${_pctx.files.length} 个现有文件：${_pctx.files.join('、')}`
+                    + (_pctx.dropped.length ? `（另有 ${_pctx.dropped.length} 个未取到，已跳过）` : ''),
+                    'info'
+                );
+                if (_pctx.dropped.length) {
+                    try { console.warn('[项目上下文] 跳过：', _pctx.dropped); } catch { }
+                }
+            }
+            const result = await streamRequest(_reqMsgs);
             
             // 保存首次回复
             conv.messages.push({
@@ -5803,7 +6453,16 @@
         }
 
         /** 小模型审查（消耗 token；仅在闸门开启且未降级时调用，模型走后端默认快模型） */
-        async function callReviewApi(code, language) {
+        /**
+ * 审查是否启用前置压缩（preCheck）。
+ *
+ * 必须是 false：压缩会删注释、压空行，行号随之改变，而修复要用行号/锚点
+ * 去切【原始】代码。改这个值会同时关闭"按行号修补"的兜底（applyFixesEx 的
+ * allowLineMode），只保留按内容锚定 —— 见 QUALITY 修复处的注释。
+ */
+const REVIEW_PRE_CHECK = false;
+
+async function callReviewApi(code, language) {
             try {
                 const resp = await fetchWithTimeout(`${state.config.apiBase}/review`, {
                     method: 'POST',
@@ -5823,9 +6482,11 @@
                         boundaryContext: state.quality.lastBoundary,
                         // 必须显式关闭前置压缩（后端默认已是 false，这里是双保险）：
                         // 一旦为 true，后端会先删注释 / 压空行再送模型，行数随之变化，
-                        // 模型返回的行号就成了压缩后坐标；而 applyFixes 用它去切【原始】
-                        // 代码 → 修改落到错误位置，且复核只查语法，改错了也不会被发现。
-                        preCheck: false,
+                        // 模型返回的行号就成了压缩后坐标；而修复靠行号去切【原始】代码
+                        // → 修改落到错误位置。
+                        // 2026-10-25：这个值不再只是"约定"，它同时传给 applyFixesEx 的
+                        // allowLineMode —— 开了压缩就禁止按行号修补，只能靠 original 锚点。
+                        preCheck: REVIEW_PRE_CHECK,
                         code
                     })
                     // 15s：后端自身 timeoutMs 默认 1500ms，这里留 10 倍余量。
@@ -5986,16 +6647,66 @@
                         // 自动修只针对 high；标了 uncertain 的不自动改，避免误伤
                         const high = issues.filter(i => i.severity === 'high' && !i.uncertain);
                         if (high.length) {
-                            const patched = applyFixes(b.code, high);
-                            if (patched) {
-                                // 修正后必须复校验：修坏了就丢弃这次修正
-                                const re = await callStaticCheck(patched, lang, b.name);
-                                if (re && re.supported && re.syntax && re.syntax.errorCount === 0) {
-                                    const md = replaceBlockAt(content, b, patched, delta);
-                                    if (md) {
-                                        delta += patched.length - (b.end - b.start);
-                                        content = md; b.code = patched; dirty = true;
-                                        stat.fixed++;
+                            // 2026-10-25：走"锚定修复" —— 按 issue.original 在附近找真实位置，
+                            // 找不到/有歧义就不修（交人工），不再盲信模型给的行号。
+                            // 第 3 步：锚定 → 假修复检测 → 规则复检（语法复检在下面）
+                            const fix = applyVerifiedFixes(b.code, high, {
+                                allowLineMode: !REVIEW_PRE_CHECK,
+                            });
+                            if (fix.discarded) {
+                                stat.discarded++;
+                                showStatus(
+                                    '⚠️ 修正与原代码没有实质差别（可能只是重排/加注释），已丢弃本次修正',
+                                    'warning'
+                                );
+                            }
+                            if (fix.ineffective.length) {
+                                stat.ineffective += fix.ineffective.length;
+                                const labels = [...new Set(fix.ineffective.map(x => x.label).filter(Boolean))];
+                                showStatus(
+                                    `⚠️ ${fix.ineffective.length} 条修复没真正解决问题`
+                                    + (labels.length ? `（复检仍命中：${labels.join('、')}）` : '')
+                                    + '，已丢弃，请人工处理',
+                                    'warning'
+                                );
+                            }
+                            if (fix.skipped.length) {
+                                // 让用户知道"有几条没自动改"以及为什么，而不是静默少修
+                                const why = fix.skipped.map(s => s.reason).join(',');
+                                stat.skipped += fix.skipped.length;
+                                showStatus(
+                                    `⚠️ 有 ${fix.skipped.length} 条修复无法安全定位（${why}），已保留原样待人工处理`,
+                                    'warning'
+                                );
+                            }
+                            if (fix.applied.length) {
+                                if (state.config.previewFixes) {
+                                    // 预览修复：只登记为「待确认」，不动代码。
+                                    // 用户在「修复记录」里逐条点「应用」才真正改。
+                                    pushFixLog(fix.applied, {
+                                        blockKey: blockKey(b), blockName: b.name, state: 'pending',
+                                    });
+                                    showStatus(
+                                        `👁 已暂存 ${fix.applied.length} 条修复，点「修复记录」确认应用`,
+                                        'info'
+                                    );
+                                } else {
+                                    const patched = fix.code;
+                                    // 修正后必须复校验：修坏了就丢弃这次修正
+                                    const re = await callStaticCheck(patched, lang, b.name);
+                                    if (re && re.supported && re.syntax && re.syntax.errorCount === 0) {
+                                        const md = replaceBlockAt(content, b, patched, delta);
+                                        if (md) {
+                                            delta += patched.length - (b.end - b.start);
+                                            content = md; b.code = patched; dirty = true;
+                                            stat.fixed += fix.applied.length;
+                                            // 留痕：记下 before/after，之后可逐条回滚
+                                            pushFixLog(fix.applied, {
+                                                blockKey: blockKey(b), blockName: b.name, state: 'applied',
+                                            });
+                                        }
+                                    } else {
+                                        showStatus('⚠️ 修正后语法校验未通过，已丢弃本次修正（原代码未改动）', 'warning');
                                     }
                                 }
                             }
@@ -6409,7 +7120,7 @@
                 symbols: { byFile: {}, exports: new Set() },
                 lastBoundary: '',
                 backfilled: false,
-                stats: { checked: 0, fixed: 0, blocked: 0, issues: 0 }
+                stats: { checked: 0, fixed: 0, blocked: 0, issues: 0, skipped: 0, discarded: 0, ineffective: 0 }
             };
 
             try {
@@ -8295,8 +9006,36 @@
                 els.modalOverlay.classList.remove('active');
             };
 
+            // ---------- 修复记录（2026-10-25 第 2 步）----------
+            if (els.fixPreviewBtn) els.fixPreviewBtn.onclick = () => togglePreviewFixes();
+            // 挂载项目（第 2 步）
+            if (els.mountBtn) els.mountBtn.onclick = () => openMount();
+            if (els.mountCloseBtn) els.mountCloseBtn.onclick = () => closeMount();
+            if (els.mountList) {
+                els.mountList.addEventListener('click', (e) => {
+                    const btn = e.target && e.target.closest ? e.target.closest('button[data-mount]') : null;
+                    if (!btn) return;
+                    const id = btn.getAttribute('data-mount');
+                    if (id) mountProject(id);
+                });
+            }
+            if (els.fixLogBtn) els.fixLogBtn.onclick = () => openFixLog();
+            if (els.fixLogCloseBtn) els.fixLogCloseBtn.onclick = () => closeFixLog();
+            if (els.fixLogRevertAllBtn) els.fixLogRevertAllBtn.onclick = () => revertAllFixes();
+            if (els.fixLogList) {
+                // 事件委托：列表是动态渲染的，逐条绑会随重渲染丢失
+                els.fixLogList.addEventListener('click', (e) => {
+                    const btn = e.target && e.target.closest ? e.target.closest('button[data-act="toggle"]') : null;
+                    if (!btn) return;
+                    const id = Number(btn.getAttribute('data-id'));
+                    if (Number.isFinite(id)) toggleFix(id);
+                });
+            }
+
             els.modalOverlay.onclick = () => {
                 els.systemPromptModal.classList.remove('active');
+                closeFixLog();
+                closeMount();
                 els.modalOverlay.classList.remove('active');
             };
 
@@ -8414,6 +9153,27 @@
                     app: els.app
                 }
                 };
+
+            /**
+             * 项目资产持久化的自检入口（2026-10-25 第 1 步）。
+             * 测试要能：造资产 → 存 → 模拟重开 → 校验恢复；以及跨会话隔离。
+             */
+            window.__persist = {
+                saveAll,
+                serializeQuality,
+                hydrateQuality,
+                serializeWorkflow,
+                hydrateWorkflow,
+                currentFixLog,
+                projectContextFor,
+                withProjectContext,
+                switchConversation,
+                createConversation,
+                quality: () => state.quality,
+                workflow: () => state.workflow,
+                conversations: () => state.conversations,
+                currentConvId: () => state.currentConvId,
+            };
 
             window.__quality = {
                 state: state.quality,

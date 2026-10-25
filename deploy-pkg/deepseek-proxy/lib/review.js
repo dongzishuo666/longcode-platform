@@ -23,6 +23,11 @@ export const ISSUE_TYPES = Object.freeze([
 /** 单条审查结果允许的最大条数（防止模型失控） */
 const MAX_ISSUES = 20;
 
+/** 锚点原文的长度上限：超过就不当锚点（一段修复不该替换整块代码） */
+const MAX_ANCHOR_CHARS = 4000;
+/** 锚点最小有效长度（去掉空白后）：太短（如单个 `}`）无法唯一定位，宁可丢弃 */
+const MIN_ANCHOR_CHARS = 6;
+
 /** 系统 Prompt：固定不变，走前缀缓存 */
 export const REVIEW_SYSTEM_PROMPT = `你是代码生成流水线的专属审查员，仅审查平台本次新生成的代码片段，严格基于给定的上下文和符号表校验，禁止脑补不存在的内容。
 
@@ -37,10 +42,15 @@ export const REVIEW_SYSTEM_PROMPT = `你是代码生成流水线的专属审查�
 输出铁则（违反则输出无效）：
 1. 仅输出纯JSON，无任何解释、注释、markdown标记、多余话术
 2. 顶层结构固定为 {"issues": []}，无问题直接输出 {"issues": []}
-3. 每个问题必须包含：line_start、line_end、severity、issue_type、description、fix_code
+3. 每个问题必须包含：line_start、line_end、severity、issue_type、description、fix_code、original
 4. line_start / line_end 为本次新生成代码片段内的相对行号，从1开始计数
 5. fix_code只输出修改后的对应代码行/片段，禁止输出完整上下文、禁止重复无问题代码
 6. 无法完全确定的问题，必须增加字段 "uncertain": true
+7. original【必填】：被 fix_code 替换掉的那几行**原始代码**，必须从给定代码里**逐字复制**，
+   不要带行号、不要带代码围栏、不要改写空格与缩进、不要包含未改动的行。
+   它的用途是让平台按「内容」定位替换位置，而不是只信行号 ——
+   行号写错时平台靠 original 仍能改对地方，写不出 original 时这条修复会被跳过。
+   若被替换区域跨多行，按原样多行输出；若只有一行，就输出那一行。
 
 严重程度：
 - high：逻辑错误、空指针/越界、接口不匹配、变量未定义、上下文衔接断裂
@@ -164,6 +174,31 @@ function normalizeIssue(raw) {
   // 既无描述又无修复代码 → 无效条目，丢弃
   if (!description && !fixCode) return null;
 
+  // 锚点原文（2026-10-25）：被 fix_code 替换掉的原始行，逐字复制。
+  // 前端靠它在±N 行窗口内按【内容】定位，行号写错也能改对地方。
+  // 太长/太短都不适合当锚点 —— 直接丢弃，让前端退化为行号模式并标注。
+  let original = String(
+    raw.original ?? raw.original_code ?? raw.before ?? raw.source_text ?? ''
+  );
+  // 剥围栏：注意只吃行内的空格/制表符，绝不能用 \s*
+  // —— \s* 会贪婪吞掉换行后的缩进，让锚点与原文错位（实测踩过）。
+  original = original
+    .replace(/^(`{3,}|~{3,})[ \t]*[\w+#.-]*[ \t]*\r?\n?/, '')
+    .replace(/\r?\n?[ \t]*(`{3,}|~{3,})[ \t]*$/, '');
+  // 只去掉首尾的空行 —— 不能用 trim()：那会把首行缩进也削掉，
+  // 而锚点与原文的缩进不一致时，人眼对照起来会误判"这段没找到"。
+  // （前端匹配时按行归一化空白，缩进差异本身能容忍，但保留原文更利于排查。）
+  original = original
+    .replace(/^(?:[ \t]*\r?\n)+/, '')
+    .replace(/(?:\r?\n[ \t]*)+$/, '')
+    .replace(/\r\n/g, '\n');
+  const originalLines = original ? original.split('\n') : [];
+  const anchorUsable =
+    original &&
+    original.length <= MAX_ANCHOR_CHARS &&
+    originalLines.filter((l) => l.trim()).length >= 1 &&
+    original.replace(/\s/g, '').length >= MIN_ANCHOR_CHARS;
+
   const issue = {
     line_start: lineStart,
     line_end: lineEnd,
@@ -172,6 +207,7 @@ function normalizeIssue(raw) {
     description,
     fix_code: fixCode,
   };
+  if (anchorUsable) issue.original = original;
   if (uncertain) issue.uncertain = true;
   return issue;
 }

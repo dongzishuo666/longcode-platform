@@ -211,39 +211,682 @@ export function replaceBlockAt(md, block, newCode, delta = 0) {
  * 而复校验只查语法，改坏后的代码语法仍可能合法，于是坏代码被采纳。
  * 因此这里「宁可不修，不可改坏」：与已应用区间重叠的直接跳过。
  */
-export function applyFixes(code, issues) {
+export function applyFixes(code, issues, opts = {}) {
+    const r = applyFixesEx(code, issues, opts);
+    return r.code;
+}
+
+/** 锚点比对窗口（行）：模型给的行号允许偏离这么多行，仍按内容找回目标 */
+const ANCHOR_WINDOW = 40;
+
+/** 归一化一行用于比对：去首尾空白 + 压缩内部连续空白 */
+function normAnchorLine(s) {
+    return String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+}
+
+/**
+ * 在 lines 里找 anchorLines 出现的位置。
+ * @returns {{index:number, ambiguous:boolean}|null}
+ */
+function findAnchor(lines, anchorLines, near, window) {
+    const a = anchorLines.map(normAnchorLine);
+    const from = Math.max(0, (near == null ? 0 : near) - window);
+    const to = Math.min(lines.length - a.length, (near == null ? lines.length : near) + window);
+    const hits = [];
+    for (let i = from; i <= to; i++) {
+        let ok = true;
+        for (let k = 0; k < a.length; k++) {
+            if (normAnchorLine(lines[i + k]) !== a[k]) { ok = false; break; }
+        }
+        if (ok) hits.push(i);
+    }
+    if (!hits.length) return null;
+    // 取离「模型声称的行号」最近的一处；两处等距 → 判断为不可靠，宁可跳过
+    const dist = (i) => Math.abs(i - (near == null ? hits[0] : near));
+    hits.sort((x, y) => dist(x) - dist(y));
+    if (hits.length > 1 && dist(hits[0]) === dist(hits[1])) {
+        return { index: hits[0], ambiguous: true };
+    }
+    return { index: hits[0], ambiguous: false };
+}
+
+/**
+ * 应用修复（带锚点定位 + 逐条审计）。
+ *
+ * 2026-10-25 改动背景：原实现**只按模型返回的 line_start/line_end 切代码**，
+ * 既不校验被切掉的到底是什么，也没有任何兜底。只要模型行号差一行
+ * （长文件很常见；审查请求若传 preCheck:true 后端还会先压缩代码，
+ * 行号必然漂移），修复就会静默落到别处 —— 语法照样合法，复校验照样通过，
+ * 于是"改对了"全靠约定与运气。
+ *
+ * 现在的策略：
+ *   ① 优先按内容锚定：issue.original（被替换的原始行）在 ±ANCHOR_WINDOW 行内查找，
+ *      命中就按**实际位置**替换 —— 行号错了也改得对；
+ *   ② 锚点找不到 / 有多处等距命中 → **不修**，记入 skipped（交人工），绝不猜；
+ *   ③ 没有锚点时才回退行号，且必须 allowLineMode !== false
+ *      （调用方在用了 preCheck 压缩时必须传 false，把"约定"变成"机制"）；
+ *   ④ 每条修复都留下 applied / skipped 记录，便于界面展示与撤销。
+ *
+ * @param {string} code 原始代码
+ * @param {Array} issues 审查结果
+ * @param {{allowLineMode?:boolean, window?:number}} opts
+ * @returns {{code:string|null, applied:Array, skipped:Array}}
+ */
+export function applyFixesEx(code, issues, opts = {}) {
+    const allowLineMode = opts.allowLineMode !== false;
+    const window = Number.isFinite(opts.window) ? Math.max(1, opts.window) : ANCHOR_WINDOW;
     const lines = String(code || '').split('\n');
+
     const list = (issues || [])
         .filter(i => i && i.fix_code && i.severity === 'high')
         .slice()
         .sort((a, b) => (b.line_start || 1) - (a.line_start || 1));
 
-    // 已应用的区间，坐标随每次 splice 平移维护（保持「当前数组」坐标系）
+    const applied = [];
+    const skipped = [];
+    // 已应用区间（当前数组坐标系），升序处理时用于重叠判断
     const ranges = [];
-    let applied = 0;
+
     for (const it of list) {
-        const s = Math.max(1, Math.trunc(it.line_start || 1)) - 1;
-        const e = Math.min(lines.length, Math.trunc(it.line_end || it.line_start || 1)) - 1;
-        if (s > e || s >= lines.length) continue;
-
-        // 与已应用区间重叠 → 跳过。注意 ranges 是 splice 后的坐标系，
-        // 而 s/e 来自模型对【原代码】的行号；降序处理 + 下面的坐标平移
-        // 保证两者始终可比（见下方维护逻辑）。
-        if (ranges.some(([as, ae]) => s <= ae && e >= as)) continue;
-
         const fixLines = String(it.fix_code).split('\n');
-        const delta = fixLines.length - (e - s + 1);
-        lines.splice(s, e - s + 1, ...fixLines);
+        const claimed = Math.max(1, Math.trunc(it.line_start || 1)) - 1;
 
-        // 坐标平移：本次 splice 影响的是 [s, ...] 之后的所有下标，
-        // 已应用区间若在 s 之后（更高行号），整体跟着移。
-        for (const r of ranges) {
-            if (r[0] > s) { r[0] += delta; r[1] += delta; }
+        // ---------- ① 按内容锚定 ----------
+        const anchorRaw = String(it.original || '').trim();
+        let target = null;    // { start, count }
+        let mode = 'anchor';
+
+        if (anchorRaw) {
+            const anchorLines = anchorRaw.split('\n');
+            const found = findAnchor(lines, anchorLines, claimed, window);
+            if (!found) {
+                skipped.push({ issue: it, reason: 'anchor-not-found',
+                    detail: '在原始代码里找不到 original 片段（可能行号与内容都不符）' });
+                continue;
+            }
+            if (found.ambiguous) {
+                skipped.push({ issue: it, reason: 'anchor-ambiguous',
+                    detail: 'original 在附近出现多处且无法判断该改哪一处' });
+                continue;
+            }
+            target = { start: found.index, count: anchorLines.length };
+        } else {
+            // ---------- ③ 无锚点 → 行号模式（受开关控制） ----------
+            if (!allowLineMode) {
+                skipped.push({ issue: it, reason: 'line-mode-disabled',
+                    detail: '本次审查使用了代码压缩（preCheck），行号不可信且缺少 original，拒绝按行号修补' });
+                continue;
+            }
+            const s = claimed;
+            const e = Math.min(lines.length, Math.trunc(it.line_end || it.line_start || 1)) - 1;
+            if (s > e || s >= lines.length) {
+                skipped.push({ issue: it, reason: 'out-of-range',
+                    detail: `行号越界（${s + 1}–${e + 1}）` });
+                continue;
+            }
+            target = { start: s, count: e - s + 1 };
+            mode = 'line';
         }
-        ranges.push([s, s + fixLines.length - 1]);
-        applied++;
+
+        // ---------- 重叠检查（两条修复不能改同一段） ----------
+        const ts = target.start, te = target.start + target.count - 1;
+        const hit = ranges.find(([as, ae]) => ts <= ae && te >= as);
+        if (hit) {
+            skipped.push({ issue: it, reason: 'overlap',
+                detail: `与已应用的修复区间（${hit[0] + 1}–${hit[1] + 1} 行）重叠` });
+            continue;
+        }
+
+        // ---------- 应用 ----------
+        const before = lines.slice(ts, ts + target.count).join('\n');
+        lines.splice(ts, target.count, ...fixLines);
+        ranges.push([ts, ts + fixLines.length - 1]);
+        applied.push({
+            issue: it,
+            mode,                       // anchor / line
+            start: ts + 1,              // 1-based，便于界面展示
+            end: ts + fixLines.length,
+            before,
+            after: fixLines.join('\n'),
+            claimedLine: claimed + 1,   // 模型原本说的行号（可能与实际不同）
+        });
     }
-    return applied ? lines.join('\n') : null;
+
+    return { code: applied.length ? lines.join('\n') : null, applied, skipped };
+}
+
+/* ==========================================================================
+ * 修复后复检：这条问题是否真的消失了（2026-10-25 第 3 步）
+ *
+ * 原来"复校验"只查语法（syntax.errorCount === 0）。但语法合法 ≠ 问题解决：
+ * 模型把 `catch (e) {}` 改成 `catch (e) { /* ignore *\/ }` 语法照样过，
+ * 空 catch 的问题一点没变，却被当成"修好了"。
+ *
+ * 这里用**保守的规则复检**兜住这一类：
+ *   · 只对"能用正则确定判定"的问题类型下结论（其余一律 checkable=false）；
+ *   · 修复后再跑同一条规则，仍命中就判"没解决"，由调用方丢弃该修复；
+ *   · 宁可漏判（交人工），也不误判"修好了"。
+ * ========================================================================== */
+
+/** 规则表：id → 检测器。每条都能"改好前命中、改好后不命中"才算有效复检。 */
+export const FIX_CHECK_RULES = {
+    // 空 catch：catch {} / catch (e) {} / catch (e) { /* 注释 */ }
+    empty_catch: {
+        re: /catch\s*(?:\([^)]*\))?\s*\{\s*(?:\/\*[\s\S]*?\*\/|\/\/[^\n]*)?\s*\}/,
+        label: '空 catch（吞异常）',
+    },
+    // eval / new Function
+    eval_usage: {
+        re: /(?:^|[^\w$.])eval\s*\(|new\s+Function\s*\(/,
+        label: '动态执行代码（eval / new Function）',
+    },
+    // SQL 字符串拼接
+    sql_concat: {
+        re: /(?:SELECT|INSERT\s+INTO|UPDATE|DELETE\s+FROM)[^;'"`\n]*(?:['"`]\s*\+\s*[A-Za-z_$]|\$\{)/i,
+        label: 'SQL 字符串拼接（未参数化）',
+    },
+    // innerHTML 直接塞变量
+    innerhtml_raw: {
+        re: /\.innerHTML\s*=\s*(?![`'"])[A-Za-z_$][\w$.\[\]]*\s*;/,
+        label: 'innerHTML 渲染未消毒变量',
+    },
+    // CORS 通配
+    cors_wildcard: {
+        re: /(?:Access-Control-Allow-Origin['"]?\s*[,:]\s*['"]\*['"])|(?:origin\s*:\s*['"]\*['"])/i,
+        label: 'CORS 允许任意来源',
+    },
+    // 硬编码密钥
+    hardcoded_secret: {
+        re: /(?:api[_-]?key|secret|password|passwd|token|access[_-]?key)\s*[:=]\s*['"][A-Za-z0-9_\-]{16,}['"]/i,
+        label: '密钥硬编码',
+    },
+    // 把堆栈返回给客户端
+    stack_leak: {
+        re: /(?:res|reply|response)\.(?:json|send|end)\s*\([^)]*\b(?:err|error|e)\.stack\b/,
+        label: '错误堆栈外泄',
+    },
+    // target="_blank" 缺 rel=noopener
+    rel_noopener: {
+        re: /target\s*=\s*['"]_blank['"](?![^>]*\brel\s*=)/,
+        label: 'target=_blank 缺 rel=noopener',
+    },
+};
+
+/**
+ * 把一条 issue 映射到可复检的规则。
+ * 只认"类型 + 关键词"都明确的情况，判不准就返回 null（不做结论）。
+ * @returns {string|null} 规则 id
+ */
+export function matchIssueRule(issue) {
+    if (!issue) return null;
+    const type = String(issue.issue_type || '').toLowerCase();
+    const text = String(issue.description || '') + ' ' + String(issue.fix_code || '');
+
+    const has = (re) => re.test(text);
+
+    if (has(/eval|new\s*Function|动态执行/i)) return 'eval_usage';
+    if (has(/SQL|参数化|拼接查询|injection|注入/i) && has(/SQL|拼接/i)) return 'sql_concat';
+    if (has(/innerHTML|XSS|未消毒/i)) return 'innerhtml_raw';
+    if (has(/CORS|跨域|origin/i) && has(/通配|\*|任意来源/i)) return 'cors_wildcard';
+    if (has(/密钥|secret|api\s*key|硬编码|token/i) && has(/硬编码|明文|hardcod/i)) return 'hardcoded_secret';
+    if (has(/堆栈|stack/i) && has(/返回|外泄|leak|暴露/i)) return 'stack_leak';
+    if (has(/noopener|rel=/i)) return 'rel_noopener';
+    // 空 catch：error_handling 类型 + 提到异常/捕获
+    if ((type === 'error_handling' || has(/异常|catch|错误处理/i)) && has(/空|未处理|吞|忽略|catch/i)) {
+        return 'empty_catch';
+    }
+    return null;
+}
+
+/**
+ * 修复后复检：这条问题在新代码里是否仍在。
+ *
+ * @param {string} patched 修复后的代码
+ * @param {object} issue   原始 issue
+ * @returns {{checkable:boolean, resolved:boolean|null, rule:string|null, label?:string}}
+ *   checkable=false 表示"这条问题类型没法用规则判定"，调用方应跳过复检（不因此丢弃修复）。
+ */
+export function verifyFix(patched, issue) {
+    const rule = matchIssueRule(issue);
+    if (!rule) return { checkable: false, resolved: null, rule: null };
+    const def = FIX_CHECK_RULES[rule];
+    const still = def.re.test(String(patched == null ? '' : patched));
+    return {
+        checkable: true,
+        resolved: !still,
+        rule,
+        label: def.label,
+    };
+}
+
+/**
+ * 在文本里按「行」定位一段片段（2026-10-25 第 2 步：撤销/预览应用共用）。
+ *
+ * 为什么按行而不是 indexOf：代码片段常有缩进差异，且整段 indexOf 对
+ * 多行文本的空行/尾随空格很敏感，容易"看起来一样却找不到"。
+ * 归一化后逐行比对，位置以【行号】返回，便于 splice。
+ *
+ * @returns {{start:number, count:number, ambiguous:boolean}|null}
+ */
+export function findSnippetLines(text, snippet) {
+    const sn = String(snippet == null ? '' : snippet);
+    if (!sn.trim()) return null;
+    const want = sn.split('\n').map(normAnchorLine);
+    if (!want.length) return null;
+    const lines = String(text == null ? '' : text).split('\n');
+    const hits = [];
+    for (let i = 0; i + want.length <= lines.length; i++) {
+        let ok = true;
+        for (let k = 0; k < want.length; k++) {
+            if (normAnchorLine(lines[i + k]) !== want[k]) { ok = false; break; }
+        }
+        if (ok) hits.push(i);
+    }
+    if (!hits.length) return null;
+    return { start: hits[0], count: want.length, ambiguous: hits.length > 1 };
+}
+
+/**
+ * 把文本里的 from 片段换成 to（用于修复的撤销 / 预览应用）。
+ * 找不到或有歧义都不动手 —— 宁可让用户手工改，也不猜错位置。
+ *
+ * @returns {{ok:boolean, text?:string, reason?:string, hits?:number}}
+ */
+export function swapSnippet(text, from, to) {
+    const src = String(text == null ? '' : text);
+    const found = findSnippetLines(src, from);
+    if (!found) return { ok: false, reason: 'not-found' };
+    if (found.ambiguous) return { ok: false, reason: 'ambiguous' };
+    const lines = src.split('\n');
+    const repl = String(to == null ? '' : to).split('\n');
+    lines.splice(found.start, found.count, ...repl);
+    return { ok: true, text: lines.join('\n'), start: found.start + 1, count: repl.length };
+}
+
+/* ==========================================================================
+ * 项目包（2026-10-25 第 2 步）：把一个会话的资产抽成"可挂载"的纯数据
+ *
+ * 为什么不是"把代码全带上"：
+ *   · 体积：一个会话几十个文件，全带上会直接撑爆 localStorage（我们还只有 2MB 预算）；
+ *   · 用途：挂载的目的是让新会话"知道这个项目有什么、按什么契约写"，
+ *     真正的代码在需要时按 loc 指向的消息位置去取（第 3 步的按需取全文）。
+ * 所以这里只存：符号表 + 契约 + 需求/方案 + 每个文件的摘要与定位 + 修复决定。
+ * ========================================================================== */
+
+/** 项目包上限：文件数 / 摘要长度 / 决定条数 */
+export const PACK_MAX_FILES = 60;
+export const PACK_DIGEST_LEN = 120;
+export const PACK_MAX_DECISIONS = 40;
+
+/**
+ * 从会话生成项目包。
+ *
+ * @param {object} conv 会话对象（messages / quality / workflow / title）
+ * @returns {object} pack（纯数据，可 JSON 化，体积很小）
+ */
+export function buildProjectPack(conv) {
+    const c = conv || {};
+    const msgs = Array.isArray(c.messages) ? c.messages : [];
+    const q = c.quality || {};
+    const w = c.workflow || {};
+
+    // 代码块：按文件名去重，保留"最后一次出现"（后写的版本更新）
+    const byName = new Map();
+    let blockSeq = 0;
+    for (let mi = 0; mi < msgs.length; mi++) {
+        const m = msgs[mi];
+        if (!m || m.role !== 'assistant' || typeof m.content !== 'string') continue;
+        for (const b of extractCodeBlocks(m.content)) {
+            blockSeq++;
+            const name = b.name || ('file-' + blockSeq);
+            byName.set(name, {
+                name,
+                lang: b.lang || '',
+                bytes: (b.code || '').length,
+                // 摘要：首个非空行（限长），给人看/给模型导航用，不是代码
+                digest: (b.code || '').split('\n').map(s => s.trim()).filter(Boolean)[0]?.slice(0, PACK_DIGEST_LEN) || '',
+                key: hashCode(b.code || '').toString(36),
+                // 定位：以后按需取全文用（消息下标 + 在 markdown 里的绝对偏移）
+                loc: { msg: mi, start: b.start, end: b.end },
+            });
+        }
+    }
+    const files = Array.from(byName.values()).slice(-PACK_MAX_FILES);
+
+    // 修复决定：只留"改了什么类型的问题"，不留 before/after（那是原文，体积大）
+    const fixLog = Array.isArray(q.fixLog) ? q.fixLog : [];
+    const decisions = fixLog.slice(-PACK_MAX_DECISIONS).map(r => ({
+        block: r.blockName || '',
+        desc: String(r.desc || '').slice(0, PACK_DIGEST_LEN),
+        state: r.state || 'applied',
+        at: r.at || 0,
+    }));
+
+    return {
+        projectId: c.id || '',
+        title: c.title || c.titleZh || '',
+        at: Date.now(),
+        contract: w.contract || null,
+        contractText: w.contractText || '',
+        requirement: String(w.requirement || '').slice(0, 2000),
+        plan: String(w.plan || '').slice(0, 1000),
+        spec: w.spec || null,
+        symbols: {
+            byFile: (q.symbols && q.symbols.byFile) || {},
+            exports: Array.from((q.symbols && q.symbols.exports) || []),
+        },
+        files,
+        decisions,
+        stats: { ...(q.stats || {}) },
+    };
+}
+
+/* ==========================================================================
+ * 按需取全文（2026-10-25 第 3 步）
+ *
+ * 第 2 步只挂载了"摘要 + 定位"，模型知道有哪些文件却看不到实现 ——
+ * 让它"加个优惠券"，它很可能重新发明一套，而不是复用已有的 order 结构。
+ * 这一步把摘要变成真正的代码：**只挑与本次提问相关的文件**，按 loc 去原文取，
+ * 带上指纹校验（消息被编辑过就不注入，宁可少给也不给错的）。
+ * ========================================================================== */
+
+/** 单文件注入上限 / 本次注入总上限 / 最多挑几个文件 */
+export const PCTX_FILE_MAX = 6000;
+export const PCTX_TOTAL_MAX = 16000;
+export const PCTX_TOP_N = 5;
+
+/** 从提问里抽英文标识符（驼峰/下划线/路径片段），用于匹配文件与符号 */
+function queryTokens(query) {
+    const q = String(query || '');
+    const ids = q.match(/[A-Za-z_$][\w$]{2,}/g) || [];
+    const ats = (q.match(/@([\w./-]{2,})/g) || []).map(s => s.slice(1));
+    return { ids: [...new Set(ids.map(s => s.toLowerCase()))], explicit: ats };
+}
+
+/**
+ * 挑出与本次提问相关的文件（纯函数）。
+ * @param {object} pack 项目包
+ * @param {string} query 用户这次说的话
+ * @returns {Array<{file:object, score:number, why:string[]}>} 已按相关度降序、最多 PCTX_TOP_N 个
+ */
+export function pickProjectFiles(pack, query, opts = {}) {
+    const p = pack || {};
+    const files = Array.isArray(p.files) ? p.files : [];
+    if (!files.length) return [];
+    const topN = Number.isFinite(opts.topN) ? opts.topN : PCTX_TOP_N;
+    const { ids, explicit } = queryTokens(query);
+    const qLower = String(query || '').toLowerCase();
+    const decisions = Array.isArray(p.decisions) ? p.decisions : [];
+
+    const scored = files.map(f => {
+        const why = [];
+        let score = 0;
+        const name = String(f.name || '').toLowerCase();
+        const base = name.split('/').pop() || name;
+        const digest = String(f.digest || '').toLowerCase();
+
+        // 显式 @文件名：最高优先
+        const hitExplicit = explicit.some(a => {
+            const al = a.toLowerCase();
+            return name === al || base === al || name.endsWith('/' + al) || name.includes(al);
+        });
+        if (hitExplicit) { score += 100; why.push('显式指定'); }
+
+        // 提问里直接点了文件名
+        if (base && qLower.includes(base)) { score += 50; why.push('提到文件名'); }
+
+        // 标识符命中：文件名 > 符号 > 摘要
+        const syms = (p.symbols && p.symbols.byFile && p.symbols.byFile[f.name]) || [];
+        const symNames = syms.map(s => String((s && s.name) || '').toLowerCase()).filter(Boolean);
+        for (const id of ids) {
+            if (name.includes(id)) { score += 30; why.push('文件名含 ' + id); }
+            else if (symNames.some(s => s.includes(id))) { score += 20; why.push('符号含 ' + id); }
+            else if (digest.includes(id)) { score += 12; why.push('摘要含 ' + id); }
+        }
+
+        // 最近改过 → 只作为"已命中文件"的加权，不能凭空把文件拉进来。
+        // 否则任何一句无关的话都会把上次改过的文件带上（实测：问"今天天气"也注入 295 字符）。
+        const touched = decisions.some(d => d && d.block === f.name);
+        if (touched && score > 0) { score += 5; why.push('最近改过'); }
+
+        return { file: f, score, why };
+    });
+
+    return scored
+        .filter(x => x.score > 0)
+        .sort((a, b) => b.score - a.score || (b.file.bytes || 0) - (a.file.bytes || 0))
+        .slice(0, Math.max(1, topN));
+}
+
+/**
+ * 按 loc 从原始会话里取回代码全文，并校验指纹。
+ * 消息被编辑/删除后位置会漂移 —— 指纹不符就不给（避免把错误内容喂给模型）。
+ *
+ * @returns {{ok:true, code:string} | {ok:false, reason:string}}
+ */
+export function resolveFileContent(sourceConv, file) {
+    const loc = file && file.loc;
+    if (!loc) return { ok: false, reason: 'no-loc' };
+    const msgs = (sourceConv && Array.isArray(sourceConv.messages)) ? sourceConv.messages : [];
+    const m = msgs[loc.msg];
+    if (!m || typeof m.content !== 'string') return { ok: false, reason: 'msg-missing' };
+    const start = Math.max(0, Math.trunc(loc.start || 0));
+    const end = Math.min(m.content.length, Math.trunc(loc.end || 0));
+    if (!(end > start)) return { ok: false, reason: 'bad-range' };
+    const code = m.content.slice(start, end);
+    if (file.key && hashCode(code).toString(36) !== file.key) {
+        return { ok: false, reason: 'hash-mismatch' };
+    }
+    return { ok: true, code };
+}
+
+/* ---------- 跨文件引用展开（2026-10-25 第 3 步补强） ----------
+ * 只按提问挑文件有个硬伤：A 调用 B 时，模型只看到调用方、看不到被调方，
+ * 于是它要么凭空假设 B 的行为，要么另写一个。这里把"被引用且在本项目里"的文件补上。
+ * 只展开一层、最多 PCTX_REF_MAX 个 —— 避免一个入口文件把整个项目拖进来。
+ */
+
+/** 最多补几个被引用文件 */
+export const PCTX_REF_MAX = 3;
+
+const JS_EXTS = ['.js', '.mjs', '.cjs', '.ts', '.tsx', '.jsx', '.vue', '.svelte'];
+const OTHER_EXTS = ['.py', '.go', '.java', '.rs', '.php', '.rb', '.cs', '.kt', '.sql'];
+
+/** 从代码里抽 import/require/include 的目标字符串 */
+export function parseImports(code) {
+    const s = String(code || '');
+    const out = new Set();
+    // import x from './a' / import './a' / import * as x from "./a"
+    for (const m of s.matchAll(/\bimport\s+(?:[^'"`;]*?\s+from\s+)?['"]([^'"]+)['"]/g)) out.add(m[1]);
+    // export ... from './a'
+    for (const m of s.matchAll(/\bexport\s+[^'"`;]*?\s+from\s+['"]([^'"]+)['"]/g)) out.add(m[1]);
+    // require('./a')
+    for (const m of s.matchAll(/\brequire\s*\(\s*['"]([^'"]+)['"]\s*\)/g)) out.add(m[1]);
+    // 动态 import('./a')
+    for (const m of s.matchAll(/\bimport\s*\(\s*['"]([^'"]+)['"]\s*\)/g)) out.add(m[1]);
+    // Python: from app.order import X  /  import app.order
+    for (const m of s.matchAll(/^\s*from\s+([A-Za-z_][\w.]*)\s+import\b/gm)) out.add(m[1]);
+    for (const m of s.matchAll(/^\s*import\s+([A-Za-z_][\w.]*)\s*$/gm)) out.add(m[1]);
+    // C/ObjC: #include "a.h"
+    for (const m of s.matchAll(/^\s*#include\s+["']([^"']+)["']/gm)) out.add(m[1]);
+    return Array.from(out);
+}
+
+/** 归一化路径：处理 . / .. / 重复斜杠 */
+function normalizePath(p) {
+    const parts = [];
+    for (const seg of String(p || '').split('/')) {
+        if (!seg || seg === '.') continue;
+        if (seg === '..') { parts.pop(); continue; }
+        parts.push(seg);
+    }
+    return parts.join('/');
+}
+
+function dirOf(name) {
+    const s = String(name || '');
+    const i = s.lastIndexOf('/');
+    return i < 0 ? '' : s.slice(0, i);
+}
+
+/**
+ * 把一个 import 目标解析到项目包里的文件。
+ * 只认"本项目内能对上的"：相对路径优先按路径+扩展名/index 试，
+ * 裸包名（react、node:fs、@scope/pkg）一律不算。
+ *
+ * @returns {object|null} pack 里的 file 对象
+ */
+export function resolveImportTarget(pack, importerName, spec) {
+    const files = (pack && Array.isArray(pack.files)) ? pack.files : [];
+    if (!files.length || !spec) return null;
+    const raw = String(spec).replace(/[?#].*$/, '').trim();
+    if (!raw) return null;
+    // 裸包名 / 协议 / 绝对路径（都不是项目内相对引用）
+    if (/^(node:|https?:)/i.test(raw)) return null;
+    if (!raw.startsWith('.') && !raw.startsWith('/')) {
+        // 允许 Python 的点号模块（app.order → app/order）作为候选，但不猜外部包
+        const dotted = raw.includes('.') && !raw.includes('/');
+        if (!dotted) return null;
+    }
+
+    const byName = new Map(files.map(f => [normalizePath(f.name), f]));
+    const base = raw.startsWith('.')
+        ? normalizePath(dirOf(importerName) + '/' + raw)
+        : normalizePath(raw.replace(/\./g, '/'));
+
+    const cands = [base];
+    for (const ext of [...JS_EXTS, ...OTHER_EXTS]) cands.push(base + ext);
+    for (const ext of [...JS_EXTS, ...OTHER_EXTS]) cands.push(base + '/index' + ext);
+
+    for (const c of cands) {
+        const hit = byName.get(c);
+        if (hit && hit.name !== importerName) return hit;
+    }
+    // 兜底：按 basename 唯一匹配（同目录没写扩展名/别名的情况）
+    const last = base.split('/').pop();
+    if (!last) return null;
+    const sameBase = files.filter(f => {
+        const b = normalizePath(f.name).split('/').pop() || '';
+        return b === last || b.replace(/\.[^.]+$/, '') === last;
+    });
+    if (sameBase.length === 1 && sameBase[0].name !== importerName) return sameBase[0];
+    return null;
+}
+
+/**
+ * 组装"项目上下文"文本（注入到 systemPrompt 用）。
+ *
+ * @param {object} sourceConv 项目包来源会话（loc 指向它的 messages）
+ * @param {object} pack 项目包
+ * @param {string} query 本次提问
+ * @returns {{text:string, files:string[], dropped:Array, chars:number}}
+ */
+export function buildProjectContext(sourceConv, pack, query, opts = {}) {
+    const p = pack || {};
+    const picked = pickProjectFiles(p, query, opts);
+    const fileMax = Number.isFinite(opts.fileMax) ? opts.fileMax : PCTX_FILE_MAX;
+    const totalMax = Number.isFinite(opts.totalMax) ? opts.totalMax : PCTX_TOTAL_MAX;
+
+    const attached = [];
+    const dropped = [];
+    const refMax = Number.isFinite(opts.refMax) ? opts.refMax : PCTX_REF_MAX;
+
+    // ---------- ① 先取"直接命中"的文件，再按 import 补被引用文件 ----------
+    const queue = picked.map(x => ({ file: x.file, by: '' }));
+    const resolved = new Map();     // name → { code, by }
+    let qi = 0;
+    let refCount = 0;
+
+    while (qi < queue.length) {
+        const item = queue[qi++];
+        const name = item.file.name;
+        if (resolved.has(name)) continue;
+
+        const r = resolveFileContent(sourceConv, item.file);
+        if (!r.ok) { dropped.push({ name, reason: r.reason }); continue; }
+        resolved.set(name, { code: r.code, by: item.by });
+
+        // 只在"直接命中"的文件上展开引用（一层，不递归套娃）
+        if (item.by) continue;
+        for (const spec of parseImports(r.code)) {
+            if (refCount >= refMax) break;
+            const t = resolveImportTarget(p, name, spec);
+            if (!t) continue;
+            if (resolved.has(t.name) || queue.some(q => q.file.name === t.name)) continue;
+            queue.push({ file: t, by: name });
+            refCount++;
+        }
+    }
+
+    // ---------- ② 按顺序做预算裁剪 ----------
+    const blocks = [];
+    let used = 0;
+    for (const item of queue) {
+        const name = item.file.name;
+        const hit = resolved.get(name);
+        if (!hit) continue;
+
+        let code = hit.code;
+        let note = '';
+        if (code.length > fileMax) {
+            code = code.slice(0, fileMax);
+            note = `（本文件已截断到 ${fileMax} 字符）`;
+        }
+        const room = totalMax - used;
+        if (room <= 200) { dropped.push({ name, reason: 'budget' }); continue; }
+        if (code.length > room) {
+            code = code.slice(0, room);
+            note = '（受本次上下文预算限制已截断）';
+        }
+        used += code.length + name.length + 40;
+        attached.push(name);
+        blocks.push(
+            '--- ' + name + ' ---'
+            + (hit.by ? `（被 ${hit.by} 引用）` : '')
+            + note + '\n```\n' + code + '\n```'
+        );
+    }
+
+    // 一个文件都没命中 → 什么都不注入（零成本）。
+    // 不要"至少带个项目抬头"：无关提问多出的几百字会稀释指令，也让用户莫名其妙。
+    if (!blocks.length) {
+        return { text: '', files: [], dropped, chars: 0 };
+    }
+
+    const apis = (p.contract && Array.isArray(p.contract.apis)) ? p.contract.apis.length : 0;
+    const head = [
+        '【已挂载项目：' + (p.title || '未命名') + '】',
+        apis
+            ? `契约已有 ${apis} 个接口 —— 新增接口必须沿用同一套路径/字段风格，**不要改动已有接口**。`
+            : '（该项目没有契约，按已有代码风格继续）',
+        '下面这些文件是从原项目里取出的**现有实现**，请在此基础上增量修改，不要重写、不要另起一套命名。',
+        '',
+    ].join('\n');
+
+    const dec = (p.decisions || []).slice(-6)
+        .map(d => '- ' + (d.block || '') + '：' + (d.desc || '') + (d.state === 'reverted' ? '（已回滚）' : ''))
+        .join('\n');
+
+    const text = head
+        + (blocks.length ? blocks.join('\n\n') : '（本次没有匹配到相关文件）')
+        + (dec ? '\n\n之前的改动记录：\n' + dec : '');
+
+    return { text, files: attached, dropped, chars: text.length };
+}
+
+/** 项目包的一句话概览（给 UI 列表用） */
+export function packSummary(pack) {
+    const p = pack || {};
+    const files = Array.isArray(p.files) ? p.files.length : 0;
+    const sym = p.symbols && p.symbols.byFile ? Object.keys(p.symbols.byFile).length : 0;
+    const dec = Array.isArray(p.decisions) ? p.decisions.length : 0;
+    return {
+        files,
+        symbolFiles: sym,
+        decisions: dec,
+        hasContract: !!(p.contract && Array.isArray(p.contract.apis) ? p.contract.apis.length : p.contract),
+        empty: !files && !sym && !dec && !p.contract,
+    };
 }
 
 /** 轻量哈希（FNV-1a 32bit）：给代码块生成指纹，避免把整段代码塞进 Set */

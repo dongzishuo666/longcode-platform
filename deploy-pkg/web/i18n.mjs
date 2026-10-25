@@ -36,6 +36,57 @@ export const ZH2EN = {
     '普通模式': 'Standard',
     '长代码模式': 'Long code',
     '需求工作流': 'Workflow',
+    '预览修复': 'Preview fixes',
+    '👁 预览': '👁 Preview',
+    '🔧 修复': '🔧 Fixes',
+    '修复': 'Fix',
+    '记录': 'Log',
+    '📦 项目': '📦 Project',
+    '挂载': 'Mount',
+    '挂载项目': 'Mount project',
+    '挂载到此会话': 'Mount into this conversation',
+    '已挂载': 'Mounted',
+    '把历史会话的项目资产（符号表/契约/改动记录）挂到当前会话': 'Mount a past conversation\'s project assets (symbols, contract, change log) into this conversation',
+    '把一个历史会话的项目资产（符号表/契约/改动记录）挂到当前会话': 'Mount a past conversation\'s project assets (symbols, contract, change log) into this conversation',
+    '把一个历史会话的资产挂到当前会话：符号表（知道有哪些文件和函数）、契约（一致性校验的基准）、改动记录（之前踩过的坑）。只挂载摘要，不复制代码全文。': 'Mount a past conversation\'s assets: symbols (what files/functions exist), contract (basis for consistency checks), change log (past pitfalls). Only summaries are mounted, not full code.',
+    '当前会话还没挂载项目': 'No project mounted in this conversation',
+    '没有其他会话可挂载': 'No other conversations to mount',
+    '该会话还没有可挂载的资产（没有代码块、契约或符号）': 'That conversation has nothing to mount (no code blocks, contract, or symbols)',
+    '不能挂载当前会话自身': 'Cannot mount the current conversation into itself',
+    '代码块': 'code blocks',
+    '符号文件': 'symbol files',
+    '有契约': 'has contract',
+    '条改动': 'changes',
+    '（无资产）': '(no assets)',
+    '未命名项目': 'Untitled project',
+    '条改动记录': 'change records',
+    '修复记录': 'Fix log',
+    '开启后，自动修正只登记不写回；在「修复记录」里逐条确认应用': 'When on, auto-fixes are only logged, not written back; confirm each one in Fix log',
+    '查看自动修正记录，可逐条回滚（改动前的内容会完整还原）': 'Review auto-fix history and revert individually (original content is fully restored)',
+    '自动修正会记在这里。回滚会把改动前的内容完整还原；改不回去时会明确说明原因，不会瞎改。': 'Auto-fixes are logged here. Revert restores the original content exactly; if it cannot be located, you get a clear reason instead of a wrong edit.',
+    '全部回滚': 'Revert all',
+    '还没有修复记录': 'No fix history yet',
+    '已应用': 'Applied',
+    '待确认': 'Pending',
+    '已回滚': 'Reverted',
+    '锚点定位': 'Anchored',
+    '行号定位': 'By line number',
+    '按行号（无锚点）': 'By line (no anchor)',
+    '回滚': 'Revert',
+    '应用': 'Apply',
+    '重新应用': 'Re-apply',
+    '👁 预览修复已开启：自动修正只登记，不直接改代码': '👁 Preview on: auto-fixes are only logged, code is not modified',
+    '自动修正已恢复正常（直接改代码，可在修复记录里回滚）': 'Auto-fix restored: code is modified directly and can be reverted from the fix log',
+    '✅ 已应用该修复': '✅ Fix applied',
+    '↩️ 已回滚该修复': '↩️ Fix reverted',
+    '没有可回滚的修复': 'Nothing to revert',
+    '当前会话没有可修改的消息': 'No message to modify in this conversation',
+    '⚠️ 这段代码在当前内容里出现多处，无法判断该改哪一处，请手工处理': '⚠️ This snippet appears multiple times; cannot tell which one to change — please edit manually',
+    '👁 已暂存': '👁 Staged',
+    '条修复，点「修复记录」确认应用': 'fix(es); open Fix log to confirm',
+    '⚠️ 修正后语法校验未通过，已丢弃本次修正（原代码未改动）': '⚠️ Post-fix syntax check failed; the fix was discarded (code untouched)',
+    '条修复无法安全定位': 'fix(es) could not be located safely',
+    '已保留原样待人工处理': 'left untouched for manual review',
     '自由对话 + 自动续写 + 质量闸门（🧩 可关）':
         'Chat + auto-continue + quality gate (toggle with 🧩)',
     '结构化引导：需求表单 → 方案评审 → 生成代码':
@@ -333,9 +384,38 @@ export function currentLang() {
     }
 }
 
+/**
+ * 空白归一化查找（2026-10-25）。
+ *
+ * 为什么需要：字典里有多行文案的键（键里带 \r\n + 缩进），而 HTML 里同一段文字的
+ * 换行/缩进取决于文件行尾（CRLF↔LF）—— 只要两者不一致，精确匹配就失效，
+ * 那条文案永远翻不出来（实测踩过：改文件行尾后 i18n 完整性测试立刻报缺）。
+ *
+ * 策略：先精确匹配；不中时把两边都压成单行空格再比。
+ */
+const normI18nKey = (s) => String(s == null ? '' : s).replace(/\s+/g, ' ').trim();
+
+const NORM2EN = (() => {
+    const m = Object.create(null);
+    for (const k of Object.keys(ZH2EN)) {
+        const nk = normI18nKey(k);
+        if (nk && !(nk in m)) m[nk] = ZH2EN[k];
+    }
+    return m;
+})();
+
+/** 查英文译文：精确优先，退化为空白归一化匹配 */
+export function lookupEn(zh) {
+    const exact = ZH2EN[zh];
+    if (exact !== undefined) return exact;
+    return NORM2EN[normI18nKey(zh)];
+}
+
 /** 文案取值（新代码用；老代码靠 applyI18n 的字典替换） */
 export function t(zh) {
-    return currentLang() === 'en' ? (ZH2EN[zh] || zh) : zh;
+    if (currentLang() !== 'en') return zh;
+    const hit = lookupEn(zh);
+    return hit === undefined ? zh : hit;
 }
 
 // 文本内容不翻译的容器（用户数据 / 代码）
@@ -418,7 +498,8 @@ export function applyI18n(root) {
         const raw = n.nodeValue;
         const key = raw.trim();
         if (!key) continue;
-        const hit = ZH2EN[key];
+        // 用归一化查找（多行文案的换行/缩进可能与字典键不一致）
+        const hit = lookupEn(key);
         if (hit === undefined) continue;
         if (n.__zh === undefined) n.__zh = raw;
         n.nodeValue = raw.replace(key, hit);
