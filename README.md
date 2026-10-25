@@ -1,15 +1,32 @@
 # 智能长代码生成平台（Long-Code Generation Platform）
 
+[![Release](https://img.shields.io/github/v/release/dongzishuo666/longcode-platform?color=success)](https://github.com/dongzishuo666/longcode-platform/releases)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](./LICENSE)
 [![Deploy](https://img.shields.io/badge/deploy-self--hosted-blue.svg)](#-生产部署)
 [![Key](https://img.shields.io/badge/key-bring--your--own-orange.svg)](#-使用说明)
 [![Models](https://img.shields.io/badge/models-Multi--Provider-blueviolet.svg)](#-多模型支持)
 [![Docker](https://img.shields.io/badge/deploy-docker-2496ED.svg)](#-docker-一键部署)
 [![Gate](https://img.shields.io/badge/gate-zero--token-brightgreen.svg)](#-零-token-质量闸门)
+[![Changelog](https://img.shields.io/badge/changelog-CHANGELOG-blue)](./CHANGELOG.md)
 
 一个面向**长代码场景**的 AI 代码生成工具：用「契约驱动双端生成 + 零 token 质量闸门 + 自动续写」把"一次性写完一个超长文件 / 一个完整项目"变得可控、可校验、可续。
 
 > **Self-hosted · Bring Your Own Key.** 本项目不提供任何公共后端服务。你克隆代码后自行部署，使用**自己的模型 API Key**。后端是一个**无状态的多模型代理**：默认对接 DeepSeek，也可以在界面里切换为 OpenAI / OpenRouter / 通义千问 / 月之暗面 Kimi / 本地 Ollama / 自定义 OpenAI 兼容端点。作者不托管、不收集、不存储任何用户密钥或代码。
+
+---
+
+## 🎯 它替你解决什么
+
+不是又一个"打开聊天窗口让 AI 写代码"——那种方式的典型痛点是：**输出被截断、写完没法校验、前后端接口对不上、换个话题就丢上下文**。这个平台针对这些做了四件事：
+
+| 痛点 | 这里的解法 |
+|---|---|
+| 长文件 / 整项目一次写不完 | 自动续写（最多 10 轮），截断自动接着写 |
+| 生成质量没保障 | 零 token 质量闸门：Tree-sitter 本地语法 / 符号 / 压缩校验 + 安全基线，不烧 token |
+| 前后端各写各的、契约对不上 | 契约驱动双端生成 + 三方一致性闭环（≤2 轮自动对齐） |
+| 换个会话 / 刷新，之前的项目就没了 | 会话→项目工作区：资产按会话持久化、可挂载历史会话、按需取全文 |
+
+适合：想用**自己的模型 Key**、**自托管**、并且要**可控且可校验**地生成较长代码 / 完整项目的人。
 
 ---
 
@@ -19,6 +36,7 @@
 - **自动续写**：模型输出被截断时自动接着写，最多 10 轮，并带上下文上限保护，避免无意义报错。
 - **契约驱动双端生成**：需求 → 契约（唯一基准）→ 前后端并行生成 → 三方一致性闭环（≤2 轮自动对齐）。
 - **需求工作流**：结构化需求采集（三层必填 + 三层可选）→ 需求分析助手 → 方案评审 → 代码生成。
+- **会话 → 项目工作区**：把单次会话升级为可持续项目——项目资产（符号表 / 契约 / 修复记录）按会话持久化、刷新不丢；一键挂载历史会话资产，让模型"接着说"而非重新发明；命中文件才按需取真代码注入，不污染提示词、不落盘历史。
 - **两种模式**：`智能生成`（自由对话 + 自动续写 + 质量闸门）与 `需求工作流`（结构化引导流水线）。质检开关独立可控。
 - **会话搜索** 与 **中英界面切换**。
 - **多模型自选**：界面顶栏可切换模型供应商并填写任意模型名，自带 Key 即插即用（详见[多模型支持](#-多模型支持)）。
@@ -59,8 +77,11 @@
 │   ├── web/                    # 前端：index.html + vendor/ + *.mjs
 │   ├── deepseek-proxy/         # 后端：Fastify 多模型代理（历史命名，现已不限于 DeepSeek）
 │   └── deploy/                 # 干净部署模板：setup.sh / longcode.conf / *.service
-├── 设计总方案.txt              # 设计文档（含 v2 附录）
-├── 后端.txt / 前端.txt         # 模块设计笔记
+├── 设计总方案.txt              # 设计文档
+├── 设计总方案_v2附录.md        # 设计文档 v2 附录（§10.x 逐轮记录）
+├── AGENTS.md                   # 项目协作规范 / 施工红线
+├── CHANGELOG.md                # 更新日志
+├── CONTRIBUTING.md             # 贡献指南
 ├── LICENSE                     # MIT
 ├── NOTICE                      # 第三方依赖归属
 └── README.md
@@ -262,6 +283,8 @@ http://host.docker.internal:11434/v1
 [MIT](./LICENSE) —— 详见 LICENSE 文件。
 
 第三方依赖归属见 [NOTICE](./NOTICE)。
+
+版本更新见 [CHANGELOG.md](./CHANGELOG.md)，正式发布见 [Releases](https://github.com/dongzishuo666/longcode-platform/releases)。
 
 ---
 
