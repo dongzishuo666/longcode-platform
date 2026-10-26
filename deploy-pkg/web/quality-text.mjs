@@ -446,14 +446,49 @@ export function matchIssueRule(issue) {
  * @returns {{checkable:boolean, resolved:boolean|null, rule:string|null, label?:string}}
  *   checkable=false 表示"这条问题类型没法用规则判定"，调用方应跳过复检（不因此丢弃修复）。
  */
-export function verifyFix(patched, issue) {
+/**
+ * 修复后复检：这条问题是否真的消失。
+ *
+ * 2026-10-25 修正（重要）：原来拿**整段代码**去跑规则，会误杀正确的修复 ——
+ * 同一段里若有两处 `catch(e){}`，模型只修了其中一处，整段仍命中规则，
+ * 于是那条**改对了的**修复被当成"没解决"丢弃。
+ *
+ * 现在分两个层面：
+ *   · `resolved` 只看**本次替换的那一小段**（opts.scope，通常是 after）——
+ *     "我这一改有没有解决我这条问题"，这才是该由本条修复负责的范围；
+ *   · `elsewhere` 表示整段里**别处**仍有同类问题 —— 那是新问题，
+ *     应当提示而不是否定本条修复。
+ *
+ * 不传 scope 时退化为旧行为（看整段），保持向后兼容。
+ *
+ * @param {string} patched 修复后的代码（用于判断"别处是否还有"）
+ * @param {object} issue 原始 issue
+ * @param {{scope?:string}} [opts] scope：本次替换后的片段
+ * @returns {{checkable:boolean, resolved:boolean|null, rule:string|null, label?:string, elsewhere?:boolean}}
+ */
+export function verifyFix(patched, issue, opts = {}) {
     const rule = matchIssueRule(issue);
-    if (!rule) return { checkable: false, resolved: null, rule: null };
+    if (!rule) return { checkable: false, resolved: null, rule: null, elsewhere: false };
     const def = FIX_CHECK_RULES[rule];
+    const scope = opts && typeof opts.scope === 'string' ? opts.scope : null;
+
+    if (scope !== null) {
+        const stillInScope = def.re.test(scope);
+        const elsewhere = def.re.test(String(patched == null ? '' : patched));
+        return {
+            checkable: true,
+            resolved: !stillInScope,   // 只对本条负责的那一段下结论
+            elsewhere,                 // 别处还有同类问题（不否定本条）
+            rule,
+            label: def.label,
+        };
+    }
+
     const still = def.re.test(String(patched == null ? '' : patched));
     return {
         checkable: true,
         resolved: !still,
+        elsewhere: still,
         rule,
         label: def.label,
     };

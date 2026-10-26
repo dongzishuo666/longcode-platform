@@ -28,6 +28,24 @@
           document.documentElement.setAttribute('data-lang',l);
           document.documentElement.setAttribute('lang', l==='en'?'en':'zh-CN');
         }catch(e){document.documentElement.setAttribute('data-lang','zh');}
+        /* 档位欢迎层（2026-10-26）：只有「全新用户」首屏先亮欢迎层 ——
+           没选过档位（config 里没有 tier）且没有任何带消息的会话。
+           存量用户不弹、默认程序员档（已确认决策 1）。
+           抢在首帧之前判定，避免"先看到主界面再弹层"的闪现；
+           主脚本起来后由 initTier() 用内联样式接管同一份判定。 */
+        try{
+          var __tw = false;
+          try{
+            var __cfg = JSON.parse(localStorage.getItem('config') || 'null');
+            if(!(__cfg && __cfg.tier)){
+              var __convs = JSON.parse(localStorage.getItem('conversations') || '[]');
+              __tw = !(Array.isArray(__convs) && __convs.some(function(c){
+                return c && Array.isArray(c.messages) && c.messages.length > 0;
+              }));
+            }
+          }catch(e){ __tw = false; }
+          if(__tw) document.documentElement.setAttribute('data-tier-welcome','1');
+        }catch(e){}
       })();
     </script>
     <title>智能代码生成平台</title>
@@ -1954,6 +1972,111 @@
             font-weight: 700;
         }
 
+        /* ---------- 档位（第 0 层，2026-10-26）：欢迎层 + 小白简版向导 ----------
+           只控制"显不显示"，不改变任何生成行为（AGENTS.md 规则 1）。
+           注意：不使用 min() —— jsdom 的 CSS 解析器不支持该函数，
+           会让整张样式表解析失败（历史教训，见上方 modal 的注释）。 */
+        .tier-welcome {
+            position: fixed; inset: 0; z-index: 1300;
+            display: none; align-items: center; justify-content: center;
+            background: rgba(15, 18, 28, .72); backdrop-filter: blur(4px);
+            padding: 24px;
+        }
+        /* 首屏抢跑：head 里的判定脚本打 data-tier-welcome 标记，
+           CSS 立即亮层；主脚本起来后 initTier() 用内联样式接管（同一份判定，单一来源） */
+        html[data-tier-welcome] .tier-welcome { display: flex; }
+        .tw-box {
+            width: 720px; max-width: 94vw;
+            background: var(--bg-secondary); border: 1px solid var(--border-strong);
+            border-radius: var(--radius-lg); box-shadow: var(--shadow-lg);
+            padding: 34px 34px 28px; text-align: center;
+            animation: heroRise .45s var(--ease) both;
+        }
+        .tw-title { font-size: 24px; font-weight: 800; color: var(--text-primary); letter-spacing: -.3px; }
+        .tw-sub { margin-top: 8px; font-size: 13px; color: var(--text-muted); }
+        .tw-cards { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 26px; }
+        .tw-card {
+            display: flex; flex-direction: column; align-items: center; gap: 8px;
+            padding: 26px 18px 20px; cursor: pointer; font-family: inherit;
+            background: var(--bg-tertiary); border: 1px solid var(--border-color);
+            border-radius: var(--radius-md); color: var(--text-secondary);
+            transition: border-color var(--dur) var(--ease), transform var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
+        }
+        .tw-card:hover { border-color: var(--accent-color); transform: translateY(-3px); box-shadow: var(--shadow-md); }
+        .tw-ico { font-size: 34px; line-height: 1; }
+        .tw-name { font-size: 16px; font-weight: 800; color: var(--text-primary); }
+        .tw-desc { font-size: 12.5px; color: var(--text-muted); line-height: 1.6; min-height: 2.8em; }
+        .tw-go {
+            margin-top: 6px; padding: 8px 26px; border: none; border-radius: var(--radius-sm);
+            background: var(--gradient-accent); color: #fff;
+            font-weight: 700; font-size: 13px;
+        }
+        @media (max-width: 720px) { .tw-cards { grid-template-columns: 1fr; } }
+
+        /* 小白简版向导：出现在空白态（hero 与模板卡在小白档位隐藏，由 applyTierGating 控制） */
+        .novice-wizard {
+            width: 640px; max-width: 94%; text-align: left;
+            background: var(--bg-secondary); border: 1px solid var(--border-color);
+            border-radius: var(--radius-lg); box-shadow: var(--shadow-md);
+            padding: 22px 24px; display: flex; flex-direction: column; gap: 14px;
+        }
+        .nw-title { font-size: 17px; font-weight: 800; color: var(--text-primary); }
+        .nw-types { display: flex; flex-wrap: wrap; gap: 8px; }
+        .nw-type {
+            padding: 7px 14px; border-radius: var(--radius-pill); cursor: pointer;
+            background: var(--bg-tertiary); border: 1px solid var(--border-color);
+            color: var(--text-muted); font-size: 13px; font-family: inherit;
+            transition: border-color var(--dur) var(--ease), color var(--dur) var(--ease), background var(--dur) var(--ease);
+        }
+        .nw-type:hover { color: var(--text-secondary); }
+        .nw-type.active {
+            border-color: var(--accent-color); color: var(--text-primary);
+            background: var(--accent-soft);
+        }
+        .nw-input {
+            width: 100%; box-sizing: border-box; resize: vertical;
+            padding: 11px 13px; border-radius: var(--radius-sm);
+            background: var(--bg-input); border: 1px solid var(--border-color);
+            color: var(--text-primary); font-size: 14px; font-family: inherit; line-height: 1.6;
+        }
+        .nw-input:focus { outline: none; border-color: var(--accent-color); }
+        .nw-input::placeholder { color: var(--text-muted); }
+        /* 温和追问气泡：一问一行 + 一键选项，答完即生成 */
+        .nw-ask {
+            display: flex; flex-direction: column; gap: 10px;
+            padding: 12px 14px; border-radius: var(--radius-sm);
+            background: var(--bg-tertiary); border: 1px solid var(--border-color);
+            animation: heroRise .3s var(--ease) both;
+        }
+        .nw-q-text { font-size: 13px; color: var(--text-secondary); line-height: 1.5; }
+        .nw-q-opts { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+        .nw-q-chip {
+            padding: 6px 12px; border-radius: var(--radius-pill); cursor: pointer;
+            background: var(--bg-input); border: 1px solid var(--border-color);
+            color: var(--text-secondary); font-size: 12.5px; font-family: inherit;
+            transition: border-color var(--dur) var(--ease), color var(--dur) var(--ease), background var(--dur) var(--ease);
+        }
+        .nw-q-chip:hover { color: var(--text-primary); border-color: var(--accent-color); }
+        .nw-q-chip.active { background: var(--accent-soft); border-color: var(--accent-color); color: var(--text-primary); }
+        .nw-skip {
+            align-self: flex-start; background: none; border: none; cursor: pointer; padding: 0;
+            color: var(--text-muted); font-size: 12px; font-family: inherit; text-decoration: underline;
+        }
+        .nw-skip:hover { color: var(--text-secondary); }
+        .nw-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+        .nw-go {
+            padding: 10px 24px; border: none; border-radius: var(--radius-sm); cursor: pointer;
+            background: var(--gradient-accent); color: #fff;
+            font-weight: 700; font-size: 14px; font-family: inherit;
+        }
+        .nw-go:disabled { opacity: .45; cursor: not-allowed; }
+        .nw-adv {
+            background: none; border: none; cursor: pointer; padding: 6px 4px;
+            color: var(--text-muted); font-size: 12.5px; font-family: inherit;
+        }
+        .nw-adv:hover { color: var(--text-secondary); }
+        .nw-hint { font-size: 11px; color: var(--text-muted); }
+
         /* ---------- 空白态（2026-10-24 第 2 步重做） ---------- */
         .empty-state {
             display: flex; flex-direction: column; align-items: center; justify-content: center;
@@ -2131,6 +2254,17 @@
             <button class="drawer-btn" id="sidebarDrawerBtn" title="会话列表">☰</button>
             <!-- 顶部配置栏 -->
             <div class="config-bar">
+                <!-- 档位（第 0 层，2026-10-26 双模式档位方案）：
+                     盖在「模式」之上的用户分层，只决定下层能力露出多少、
+                     需求录入走简版还是完整版。两个档位都显示本选择器 ——
+                     小白要能从这里切回程序员。切档位不重置进行中的会话。 -->
+                <div class="config-item tier-item">
+                    <label>档位</label>
+                    <select id="tierSel" title="编程小白：极简入口，质检强制开启；程序员：完整控制">
+                        <option value="novice">编程小白</option>
+                        <option value="pro">程序员</option>
+                    </select>
+                </div>
                 <!-- 模式（2026-10-24 合并 3 → 2）：
                      原「普通模式」是「长代码模式」的真子集 —— 它只是把平台的
                      自动续写与质量闸门关掉了，却因为默认选中，让新用户一进来
@@ -2138,7 +2272,7 @@
                        · 智能生成 = 自由对话 + 自动续写 + 质量闸门
                        · 需求工作流 = 结构化引导流水线
                      质检开/关交给 🧩 开关做正交控制，不再和模式耦合。 -->
-                <div class="config-item mode-item">
+                <div class="config-item mode-item" id="modeItemWrap">
                     <label>模式</label>
                     <select id="modeSel">
                         <option value="smart">智能生成</option>
@@ -2178,7 +2312,7 @@
                     <label>上下文</label>
                     <input type="number" id="ctxInput" min="1000" max="2000000" step="1024" style="width: 100px;">
                 </div>
-                <div class="config-item">
+                <div class="config-item" id="tempItemWrap">
                     <label>温度</label>
                     <input type="range" id="tempSlider" min="0" max="2" step="0.1" value="0.7">
                     <span class="temp-value" id="tempValue">0.7</span>
@@ -2209,7 +2343,7 @@
                          授权矩阵 / 业务不变量 / 交付项填进第 7-9 层表单。 -->
                     <div class="hero">
                         <h1 class="hero-title">描述需求，<em>自动交付可运行的双端工程</em></h1>
-                        <p class="hero-sub">先定契约，再并行生成前后端；每段代码都过零 token 静态校验与语义审查。</p>
+                        <p class="hero-sub" id="heroSub">先定契约，再并行生成前后端；每段代码都过零 token 静态校验与语义审查。</p>
                         <div class="hero-chips">
                             <span class="chip"><i></i>契约双端</span>
                             <span class="chip"><i></i>质量闸门</span>
@@ -2219,7 +2353,7 @@
                         </div>
                     </div>
 
-                    <div class="tpl-title">从一个场景开始 <em>点击预填结构化需求</em></div>
+                    <div class="tpl-title" id="tplTitle">从一个场景开始 <em>点击预填结构化需求</em></div>
                     <div class="tpl-grid" id="tplGrid">
                         <button type="button" class="tpl" data-preset="shop">
                             <span class="tpl-ico">🛒</span>
@@ -2239,6 +2373,32 @@
                             <span class="tpl-desc">任务状态机、指派归属、只能改自己的</span>
                             <span class="tpl-tags"><b>状态机</b><b>归属</b><b>看板</b></span>
                         </button>
+                    </div>
+
+                    <!-- 小白简版向导（2026-10-26 双模式档位）：类型一键 + 一句话大白话，
+                         组装成一条消息走「智能生成」现有管道（已确认决策 3：零主流程改动）。
+                         高级选项全部藏在档位后面；质量闸门 / 审查 / 自动对齐强制开启。
+                         只在 tier=novice 且空会话时由 applyTierGating 显示（随空白态整体显隐）。 -->
+                    <div class="novice-wizard" id="noviceWizard" style="display: none;">
+                        <div class="nw-title">说说你想做什么</div>
+                        <div class="nw-types" id="nwTypes">
+                            <button type="button" class="nw-type active" data-type="web">🌐 网站</button>
+                            <button type="button" class="nw-type" data-type="miniapp">📱 小程序</button>
+                            <button type="button" class="nw-type" data-type="api">⚙️ 后端 API</button>
+                            <button type="button" class="nw-type" data-type="script">📜 脚本工具</button>
+                            <button type="button" class="nw-type" data-type="other">✨ 其它</button>
+                        </div>
+                        <textarea id="nwDesc" class="nw-input" rows="3"
+                            placeholder="比如：做一个能记账的网页，数据存本地"></textarea>
+                        <!-- 温和追问气泡（2026-10-26 方案 §3.2）：描述含糊时最多问 2 个问题，
+                             全部一键作答（不让小白打字），答完即生成；可随时「跳过，直接生成」。
+                             判定用零 token 启发式（不额外调模型，省下每轮的翻倍成本）。 -->
+                        <div class="nw-ask" id="nwAsk" style="display: none;"></div>
+                        <div class="nw-foot">
+                            <button type="button" class="nw-go" id="nwGoBtn" disabled>🚀 开始生成</button>
+                            <button type="button" class="nw-adv" id="nwAdvBtn">▸ 高级模式</button>
+                        </div>
+                        <div class="nw-hint">类型与技术栈只是建议，模型可以按需求自行调整</div>
                     </div>
                 </div>
             </div>
@@ -2565,6 +2725,11 @@
                     <button class="test-btn" id="testBtn" title="测试后端连接是否正常">
                         <span class="btn-line">连接</span><span class="btn-line">测试</span>
                     </button>
+                    <!-- 更多（2026-10-26 档位第 0 层）：小白档位下展开被折叠的高级工具。
+                         质量闸门 / 审查 / 自动对齐不在其中 —— 它们在小白档位强制开启，不给关。 -->
+                    <button class="config-item tool-btn" id="tierMoreBtn" title="展开高级工具（系统提示词 / 安全基线 / 修复记录等）" style="display:none">
+                        <span class="btn-line">⋯</span><span class="btn-line">更多</span>
+                    </button>
                     <!-- 明暗切换按钮已移除（2026-10-24）：只保留紫罗兰深色一套 -->
                     <button class="config-item tool-btn" id="langToggleBtn" title="Switch language / 切换语言" data-no-i18n>
                         <span class="btn-line">🌐</span><span class="btn-line" id="langLabel">EN</span>
@@ -2579,6 +2744,30 @@
                 </div>
             </div>
         </main>
+    </div>
+
+    <!-- 档位欢迎层（2026-10-26）：仅全新用户首次进入弹一次；
+         选完写入 config.tier（随 config JSON 持久化，不另设 localStorage 键，避免双真源）。
+         存量用户不弹、默认程序员档（已确认决策 1）。 -->
+    <div class="tier-welcome" id="tierWelcome">
+        <div class="tw-box">
+            <div class="tw-title">你更想怎么用这个平台？</div>
+            <div class="tw-sub">选择后可随时在顶部「档位」里切换，不影响已有内容</div>
+            <div class="tw-cards">
+                <button type="button" class="tw-card" data-tier="novice">
+                    <span class="tw-ico">🐣</span>
+                    <span class="tw-name">编程小白模式</span>
+                    <span class="tw-desc">我只会说人话，你帮我搞定技术细节</span>
+                    <span class="tw-go">开始</span>
+                </button>
+                <button type="button" class="tw-card" data-tier="pro">
+                    <span class="tw-ico">🛠</span>
+                    <span class="tw-name">程序员模式</span>
+                    <span class="tw-desc">我要完整控制技术栈、契约和生成流程</span>
+                    <span class="tw-go">开始</span>
+                </button>
+            </div>
+        </div>
     </div>
 
     <!-- 系统提示词弹窗 -->
@@ -2756,6 +2945,9 @@
                 // 上下文窗口（token）：按供应商预设取值，用于续写的长度保护。
                 contextTokens: 131072,
                 mode: 'smart',      // smart / workflow（normal、longcode 已合并进 smart）
+                // 档位（第 0 层，2026-10-26）：novice / pro，盖在 mode 之上。
+                // 存量配置没有该字段 → loadAll 里 normalizeTier 归一到 pro（决策 1：不弹欢迎层）。
+                tier: 'pro',
                 temperature: 0.7,
                 systemPrompt: '',
                 qualityEnabled: true,   // 质量闸门总开关（持久化）
@@ -2795,6 +2987,8 @@
                 contract: null,     // 契约对象（契约双端模式）
                 contractText: ''    // 契约原文（可在面板里编辑）
             },
+            noviceType: 'web',      // 小白向导当前选中的类型（运行时态，不持久化）
+            noviceAnswers: {},      // 小白"温和追问"的答复 { storage|auth|file: 'yes'|'no' }（运行时态）
             stopFlag: false,        // 停止生成标志
             isGenerating: false,    // 是否正在生成
             continueCount: 0,       // 当前续写次数
@@ -3387,6 +3581,21 @@
             fileInput: document.getElementById('fileInput'),
             imagePreview: document.getElementById('imagePreview'),
             modeSel: document.getElementById('modeSel'),
+            // ---------- 档位（第 0 层）----------
+            tierSel: document.getElementById('tierSel'),
+            tierWelcome: document.getElementById('tierWelcome'),
+            tierMoreBtn: document.getElementById('tierMoreBtn'),
+            modeItemWrap: document.getElementById('modeItemWrap'),
+            tempItemWrap: document.getElementById('tempItemWrap'),
+            heroSub: document.getElementById('heroSub'),
+            tplTitle: document.getElementById('tplTitle'),
+            tplGrid: document.getElementById('tplGrid'),
+            noviceWizard: document.getElementById('noviceWizard'),
+            nwTypes: document.getElementById('nwTypes'),
+            nwDesc: document.getElementById('nwDesc'),
+            nwAsk: document.getElementById('nwAsk'),
+            nwGoBtn: document.getElementById('nwGoBtn'),
+            nwAdvBtn: document.getElementById('nwAdvBtn'),
             providerSel: document.getElementById('providerSel'),
             modelInput: document.getElementById('modelInput'),
             modelOptions: document.getElementById('modelOptions'),
@@ -3681,6 +3890,279 @@
             return 'smart';   // smart / normal / longcode / 空 / 未知 → smart
         }
 
+        // ==================== 档位（第 0 层，2026-10-26 双模式档位方案） ====================
+        // 定位：盖在「模式」之上的用户分层。档位只决定【下层能力露出多少、需求录入
+        // 走简版还是完整版】，绝不改变智能生成 / 质量闸门 / 契约一致性的任何行为
+        //（AGENTS.md 规则 1：UI 简化不得影响生成行为）。
+        // 安全铁律：小白档位下质量闸门 / 小模型审查 / 一致性自动对齐强制开启 ——
+        // 小白只是看不到开关和细节，不是绕过检查。切回程序员档不恢复原值（已确认决策 2）。
+
+        /** 档位归一化：只认 novice，其余（空 / 未知 / 存量缺字段）一律 pro。
+         *  存量用户因此默认程序员档且不弹欢迎层（已确认决策 1）。 */
+        function normalizeTier(t) {
+            return t === 'novice' ? 'novice' : 'pro';
+        }
+
+        /** 小白「高级模式 / 更多」的临时展开态。
+         *  刻意不持久化：刷新即收回 —— 它是"临时借用程序员能力"，不是档位本身。 */
+        let tierExpanded = false;
+
+        // 工具条按钮分三组（已确认决策 4 的白名单）：
+        //   keep   两档都显示（语言 / 数据中心 / 连接测试 —— 基础可见性）
+        //   more   小白折叠进「更多」（系统提示词 / 安全基线 / 预览修复 / 修复记录 / 项目挂载）
+        //   hide   小白永远不可见（质量闸门 / 审查 / 自动对齐 —— 强制开启不给关；
+        //          记忆库 —— 面向调优，小白不需要）
+        const TIER_TOOL_KEEP = ['langToggleBtn', 'dataBtn', 'testBtn'];
+        const TIER_TOOL_MORE = ['systemPromptBtn', 'securityBtn', 'fixPreviewBtn', 'fixLogBtn', 'mountBtn'];
+        const TIER_TOOL_HIDE = ['qualityBtn', 'qualityReviewBtn', 'dualRepairBtn', 'memoryBtn'];
+
+        function noviceUI() { return state.config.tier === 'novice'; }
+
+        /** 某个工具按钮在当前档位 + 展开态下是否可见（fixLogBtn 另叠"有记录才显示"） */
+        function tierToolVisible(id) {
+            if (!noviceUI()) return true;
+            if (TIER_TOOL_KEEP.includes(id)) return true;
+            if (TIER_TOOL_HIDE.includes(id)) return false;
+            return tierExpanded;
+        }
+
+        /** 小白模式下三开关点击的拦截：按钮已被藏起来，这里是键盘/测试路径的兜底 */
+        function tierGuard(tool) {
+            if (!noviceUI()) return false;
+            showStatus('🐣 编程小白模式下「' + tool + '」保持开启，切换到程序员模式后可调整', 'info');
+            return true;
+        }
+
+        /** 欢迎层是否该弹：只信任 head 抢跑脚本在【任何写盘之前】打的标记。
+         *  不能在这里重读 localStorage —— loadAll 的「无会话则新建」会先把
+         *  默认 config（含 tier:'pro'）写进去，重读会把全新用户误判成"选过档位"。
+         *  标记的写入条件（head IIFE）：没存过 tier 且没有任何带消息的会话。 */
+        function tierWelcomeNeeded() {
+            return document.documentElement.hasAttribute('data-tier-welcome');
+        }
+
+        function hideTierWelcome() {
+            if (els.tierWelcome) els.tierWelcome.style.display = 'none';
+            document.documentElement.removeAttribute('data-tier-welcome');
+        }
+
+        /** 档位显隐的总闸：切档位 / init / 展开态变化都走这里。 */
+        function applyTierGating() {
+            const novice = noviceUI();
+
+            // ① 顶栏高级行：小白收起「模式 / 供应商 / 温度」（供应商行由 syncProviderUI 叠加判定）
+            if (els.modeItemWrap) els.modeItemWrap.style.display = novice ? 'none' : '';
+            if (els.tempItemWrap) els.tempItemWrap.style.display = novice ? 'none' : '';
+
+            // ② 工具条：keep 组常显，more/hide 组按档位 + 展开态。
+            //    fixLogBtn 不在这里 —— 它自带"有记录才显示"，由 updateFixLogBtn 叠加档位。
+            for (const id of [...TIER_TOOL_KEEP, ...TIER_TOOL_MORE, ...TIER_TOOL_HIDE]) {
+                if (id === 'fixLogBtn') continue;
+                const el = els[id];
+                if (el) el.style.display = tierToolVisible(id) ? '' : 'none';
+            }
+            if (els.tierMoreBtn) {
+                els.tierMoreBtn.style.display = novice ? '' : 'none';
+                // 展开态只用 .off 半透明表达，不换 title 文案：
+                // 动态 title 会绕过 i18n 的静态字典匹配（历史约定：标签不塞动态内容）
+                els.tierMoreBtn.classList.toggle('off', !tierExpanded);
+            }
+
+            // ③ 空白态：小白看向导，不看场景模板卡（含标题行）与带术语的副标题
+            if (els.tplTitle) els.tplTitle.style.display = novice ? 'none' : '';
+            if (els.tplGrid) els.tplGrid.style.display = novice ? 'none' : '';
+            if (els.heroSub) els.heroSub.style.display = novice ? 'none' : '';
+            if (els.noviceWizard) {
+                els.noviceWizard.style.display =
+                    (novice && state.config.mode === 'smart') ? '' : 'none';
+            }
+
+            // ④ 小白强制开启三开关（安全铁律）。切回 pro 不恢复原值 —— 已确认决策 2。
+            //    真的改过才落盘：刷新后仍是强制态，而不是靠内存里这一次赋值。
+            if (novice) {
+                let forced = false;
+                if (state.config.qualityEnabled !== true) { state.config.qualityEnabled = true; forced = true; }
+                if (state.config.qualityReview !== true) { state.config.qualityReview = true; forced = true; }
+                if (state.config.dualAutoRepair !== true) { state.config.dualAutoRepair = true; forced = true; }
+                syncQualityBtns();
+                if (forced) saveAll();
+            }
+
+            // ⑤ 供应商 / 上游地址 / 上下文三行的显隐要叠加档位（单一函数内判定，避免两处显隐互相覆盖）
+            syncProviderUI();
+            // ⑥ 修复记录按钮：自带"有记录才显示"，档位/展开态变化时重算（内部叠 tierToolVisible）
+            updateFixLogBtn();
+
+            // 向导里的「高级模式」按钮文案
+            if (els.nwAdvBtn) {
+                els.nwAdvBtn.textContent = tierExpanded ? '▾ 收起高级模式' : '▸ 高级模式';
+            }
+            // 动态改过文案后，英文环境要重刷字典（与 syncModeHint 同一套路）
+            if (window.I18N && window.I18N.currentLang() === 'en') window.I18N.applyI18n();
+        }
+
+        /** init 里调用：欢迎层判定 + 显隐初始化（与 head 抢跑脚本同一份判定） */
+        function initTier() {
+            if (els.tierSel) els.tierSel.value = state.config.tier;
+            if (tierWelcomeNeeded()) {
+                if (els.tierWelcome) els.tierWelcome.style.display = 'flex';
+                document.documentElement.setAttribute('data-tier-welcome', '1');
+            } else {
+                hideTierWelcome();
+            }
+            applyTierGating();
+        }
+
+        /** 切换档位的唯一入口（欢迎层卡片与顶栏选择器都走这里）。
+         *  铁律：不重置会话、不调 resetWorkflow —— 只影响控件露出与下一次录入形态。 */
+        function setTier(v) {
+            const next = normalizeTier(v);
+            state.config.tier = next;
+            if (els.tierSel) els.tierSel.value = next;
+            hideTierWelcome();
+            // 先归一 mode（syncReqPanel 内：novice + workflow + idle → 回 smart），
+            // 再按归一后的状态做显隐，否则向导会按旧 mode 误判。
+            syncReqPanel();
+            applyTierGating();
+            syncModeHint();
+            updateSendBtnState();
+            saveAll();
+            showStatus(next === 'novice'
+                ? '🐣 已切换到编程小白模式：极简入口，质量闸门保持开启'
+                : '🛠 已切换到程序员模式：高级控件已全部展开', 'info');
+        }
+
+        // 小白向导的类型 → 默认技术栈建议（只是拼进消息的一句建议，模型可自行调整）
+        const NOVICE_TYPES = {
+            web:     { label: '网站',     stack: '前端 HTML/CSS/JavaScript（需要复杂交互可用 React）；如需保存数据，配一个轻量后端（Node.js + Express + SQLite）' },
+            miniapp: { label: '小程序',   stack: '微信小程序（原生或 uni-app）' },
+            api:     { label: '后端 API', stack: 'Node.js + Express 或 Python + FastAPI，数据用 SQLite，附简单的接口说明' },
+            script:  { label: '脚本工具', stack: '单文件 Python 或 Node.js 脚本，命令行直接运行，不依赖复杂数据库' },
+            other:   { label: '',         stack: '' }
+        };
+
+        /** 小白向导 → 组装成一条消息（大白话描述 + 类型默认栈建议 + 追问答复） */
+        function buildNoviceMessage() {
+            const desc = (els.nwDesc && els.nwDesc.value || '').trim();
+            if (!desc) return '';
+            const t = NOVICE_TYPES[state.noviceType] || NOVICE_TYPES.other;
+            const lines = [desc];
+            if (t.stack) {
+                lines.push('',
+                    `（项目类型：${t.label}。技术栈建议：${t.stack}。如果你认为有更合适的方案可以自行选择，` +
+                    '但必须交付完整、可直接运行的代码，并写清楚怎么运行。）');
+            } else {
+                lines.push('', '（请交付完整、可直接运行的代码，并写清楚怎么运行。）');
+            }
+            // 温和追问的答复：有才追加（跳过 = 不追加，让模型自行采用最合理假设）
+            const ans = noviceAnswersText();
+            if (ans) lines.push('', `（补充说明：${ans}。）`);
+            return lines.join('\n');
+        }
+
+        // ---------- 温和追问（方案 §3.2）：零 token 启发式，最多 2 问，一键作答 ----------
+        // 刻意不调模型：如果每轮生成前都多一次小模型调用，成本翻倍；
+        // 而"要不要存数据 / 要不要登录"这类判断用关键词就够，问错也只是多一个问题。
+        const NOVICE_ANSWER_TEXT = {
+            storage: { yes: '需要保存数据（关掉页面后也要还在）', no: '不需要保存数据，刷新丢了也没关系' },
+            auth: { yes: '需要登录和账号', no: '不需要登录，一个人用' },
+            file: { yes: '需要读取本地文件', no: '只处理手动输入的内容' }
+        };
+
+        /** 该问哪些问题：描述里已交代的就不问；返回 [{ key, text, opts: [[value, label]] }] */
+        function pickNoviceQuestions(desc, type) {
+            const d = String(desc || '');
+            const t = type || 'other';
+            const typed = (t === 'web' || t === 'miniapp' || t === 'api');
+            const out = [];
+            // ① 数据存储：网站 / 小程序 / 后端 API 都需要先明确
+            if (typed && !/保存|存储|数据|数据库|本地|云端|记录|上传|文件/.test(d)) {
+                out.push({
+                    key: 'storage',
+                    text: '做出来的东西要保存数据吗？（关掉页面后还能看到）',
+                    opts: [['yes', '要保存'], ['no', '不用，刷新丢了也行']]
+                });
+            }
+            // ② 登录 / 多人：决定要不要账号与权限这一整层
+            if (typed && !/登录|账号|用户|成员|权限|多人|协作|分享|私密/.test(d)) {
+                out.push({
+                    key: 'auth',
+                    text: '需要登录或多人一起用吗？',
+                    opts: [['yes', '要登录'], ['no', '不用，自己用']]
+                });
+            }
+            // ③ 脚本工具：读不读本地文件决定整段代码形态
+            if (t === 'script' && !/文件|读取|导入|csv|excel|日志/i.test(d)) {
+                out.push({
+                    key: 'file',
+                    text: '这个脚本需要读取本地文件吗？',
+                    opts: [['yes', '要读文件'], ['no', '只处理我输入的内容']]
+                });
+            }
+            return out.slice(0, 2);   // 方案约定：最多 2 个问题
+        }
+
+        function noviceAnswersText() {
+            const out = [];
+            for (const k of Object.keys(state.noviceAnswers || {})) {
+                const v = NOVICE_ANSWER_TEXT[k] && NOVICE_ANSWER_TEXT[k][state.noviceAnswers[k]];
+                if (v) out.push(v);
+            }
+            return out.join('；');
+        }
+
+        /** 渲染追问气泡（全是按钮，不需要打字） */
+        function renderNoviceQuestions(qs) {
+            els.nwAsk.innerHTML = '';
+            for (const q of qs) {
+                const row = document.createElement('div');
+                row.className = 'nw-q';
+                const tt = document.createElement('div');
+                tt.className = 'nw-q-text';
+                tt.textContent = q.text;
+                row.appendChild(tt);
+                const opts = document.createElement('div');
+                opts.className = 'nw-q-opts';
+                for (const [v, label] of q.opts) {
+                    const b = document.createElement('button');
+                    b.type = 'button';
+                    b.className = 'nw-q-chip';
+                    b.dataset.k = q.key;
+                    b.dataset.v = v;
+                    b.textContent = label;
+                    opts.appendChild(b);
+                }
+                row.appendChild(opts);
+                els.nwAsk.appendChild(row);
+            }
+            const skip = document.createElement('button');
+            skip.type = 'button';
+            skip.className = 'nw-skip';
+            skip.textContent = '跳过，直接生成';
+            els.nwAsk.appendChild(skip);
+            els.nwAsk.style.display = '';
+        }
+
+        /** 清空本轮追问（描述或类型一改，旧答复就作废） */
+        function resetNoviceAsk() {
+            state.noviceAnswers = {};
+            if (els.nwAsk) {
+                els.nwAsk.style.display = 'none';
+                els.nwAsk.innerHTML = '';
+            }
+        }
+
+        /** 小白向导的发送收口：组装 → 塞进底部输入框 → smart 现有管道（决策 3） */
+        function sendNovice() {
+            const text = buildNoviceMessage();
+            if (!text) return;
+            els.messageInput.value = text;
+            updateSendBtnState();
+            resetNoviceAsk();
+            if (els.nwDesc) { els.nwDesc.value = ''; els.nwGoBtn.disabled = true; }
+            if (!els.sendBtn.disabled) sendRequest(true);
+        }
+
         // 存量迁移表：只留【确已被淘汰、上游不再接受】的名字。
         // deepseek-chat / reasoner 以前也在这里，被强制收敛成 flash；放开多模型后
         // 要尊重用户选择（官方仍会把它们重定向到 flash，选了也不会出错），故移出。
@@ -3852,6 +4334,9 @@
                 // 不迁移的话，老用户 localStorage 里的 'normal' 会让下拉选不中任何项
                 // （options 已无该值），且模式判断全部失效。
                 state.config.mode = normalizeMode(state.config.mode);
+                // 档位归一化（2026-10-26）：存量配置没有 tier → 归一到 pro。
+                // 存量用户不弹欢迎层、默认程序员档（已确认决策 1）。
+                state.config.tier = normalizeTier(state.config.tier);
                 // 上下文窗口：老配置没有这个字段（或存了脏值）→ 按供应商预设补上。
                 // 不补的话 currentCtxTokens() 会走 FALLBACK，对 32K 窗口的供应商
                 // （Kimi / Ollama）等于长度保护失效，续写会一路撞到上游报错。
@@ -3923,9 +4408,14 @@
             if (els.ctxWrap) els.ctxWrap.style.display = 'none';
             return;
           }
-          // 多模型开启：恢复供应商入口
+          // 多模型开启：恢复供应商入口。
+          // 档位叠加（2026-10-26）：小白档（未展开高级）仍收起 —— 小白只填模型名。
+          // 显隐的判定只在这一个函数里，applyTierGating 结尾会重调它，两处不会互相覆盖。
           const item = els.providerSel.closest('.config-item');
-          if (item) item.style.display = '';
+          if (item) {
+              if (state.config.tier === 'novice' && !tierExpanded) item.style.display = 'none';
+              else item.style.display = '';
+          }
 
           const key = normalizeProvider(state.config.provider);
             state.config.provider = key;
@@ -3946,7 +4436,9 @@
 
             // 上游地址 / 上下文：预设已带地址的不再露出（省得误改），
             // 只有「自定义」和「本地 Ollama」（地址常因主机 / 端口而变）才显示。
-            const showAdvanced = key === 'custom' || key === 'ollama';
+            // 小白档未展开高级时同样收起（applyTierGating 的既有约定）。
+            const showAdvanced = (key === 'custom' || key === 'ollama')
+                && !(state.config.tier === 'novice' && !tierExpanded);
             if (els.providerBaseWrap) {
                 els.providerBaseWrap.style.display = showAdvanced ? '' : 'none';
             }
@@ -4012,7 +4504,9 @@
             }
             if (els.qualityReviewBtn) {
                 els.qualityReviewBtn.classList.toggle('off', !rev);
-                els.qualityReviewBtn.style.display = on ? '' : 'none';
+                // 显隐 = 闸门开着 && 档位允许（小白档这一组强制开启且不可见，见 tierToolVisible）
+                els.qualityReviewBtn.style.display =
+                    (on && tierToolVisible('qualityReviewBtn')) ? '' : 'none';
                 els.qualityReviewBtn.title = rev
                     ? '小模型审查：开（闸门内启用，会消耗少量 token）。点击关闭'
                     : '小模型审查：关（只做零 token 静态校验）。点击开启';
@@ -4896,6 +5390,10 @@
                     before: it.before,
                     after: it.after,
                     desc: (it.issue && it.issue.description) || '',
+                    // 复检留痕（2026-10-25 第 3 步）：这条修复的复检结论，
+                    // 让用户能自己核对"平台为什么采纳/丢弃它"，而不是只能相信结论。
+                    verify: it.verify || null,
+                    reason: it.reason || '',
                     state: meta.state || 'applied',
                     at: Date.now(),
                 });
@@ -4909,12 +5407,17 @@
 
         function updateFixLogBtn() {
             if (!els.fixLogBtn) return;
-            const n = currentFixLog().filter(r => r.state === 'applied' || r.state === 'pending').length;
-            els.fixLogBtn.style.display = n ? '' : 'none';
+            const rows = currentFixLog();
+            const n = rows.filter(r => r.state === 'applied' || r.state === 'pending').length;
+            const rej = rows.filter(r => r.state === 'rejected').length;
+            // 只有"已丢弃"时也要能打开，否则用户只看到代码没变、不知为何
+            // 显隐再叠一层档位：小白档未展开高级时收起（more 组）
+            els.fixLogBtn.style.display =
+                ((n || rej) && tierToolVisible('fixLogBtn')) ? '' : 'none';
             // 只改 title 不改标签：标签若塞进动态数字，
             // 英文模式下就再也匹配不到字典（i18n 是按文本精确映射的）。
-            els.fixLogBtn.title = n
-                ? `查看自动修正记录（${n} 条待确认/已应用），可逐条回滚`
+            els.fixLogBtn.title = (n || rej)
+                ? `查看自动修正记录（${n} 条待确认/已应用${rej ? `，${rej} 条未采纳` : ''}）`
                 : '查看自动修正记录';
             if (els.fixPreviewBtn) els.fixPreviewBtn.classList.toggle('off', !state.config.previewFixes);
         }
@@ -4953,9 +5456,24 @@
             els.fixLogList.innerHTML = rows.map(r => {
                 const stateText = r.state === 'applied' ? '已应用'
                     : r.state === 'pending' ? '待确认'
+                    : r.state === 'rejected' ? '已丢弃'
                     : r.state === 'reverted' ? '已回滚' : r.state;
                 const modeText = r.mode === 'anchor' ? '锚点定位' : '行号定位';
                 const warn = r.mode === 'line' ? '<span class="fixlog-tag warn">按行号（无锚点）</span>' : '';
+                // 复检结论（第 3 步）：让用户看到"平台凭什么采纳或丢弃这条"
+                const v = r.verify;
+                const verifyTag = !v ? ''
+                    : v.checkable === false ? '<span class="fixlog-tag warn">复检：无法判定</span>'
+                    : v.resolved === true
+                        ? '<span class="fixlog-tag">复检通过</span>'
+                          + (v.elsewhere ? '<span class="fixlog-tag warn">别处还有同类</span>' : '')
+                        : '<span class="fixlog-tag warn">复检未通过</span>'
+                          + (v.label ? '<span class="fixlog-tag warn">' + escapeFixLog(v.label) + '</span>' : '');
+                const reasonText = r.reason
+                    ? '<div class="fixlog-meta"><span class="fixlog-tag warn">未采纳</span><span>'
+                      + escapeFixLog(REJECT_REASON_TEXT[r.reason] || r.reason) + '</span></div>'
+                    : '';
+                // 已丢弃的修复不能回滚/应用（它从未写进代码）
                 const act = r.state === 'applied' ? '回滚'
                     : r.state === 'pending' ? '应用'
                     : r.state === 'reverted' ? '重新应用' : '';
@@ -4966,16 +5484,29 @@
                     + '<div class="fixlog-meta">'
                     + '<span class="fixlog-tag">' + stateText + '</span>'
                     + (r.mode === 'anchor' ? '<span class="fixlog-tag">' + modeText + '</span>' : warn)
+                    + verifyTag
                     + '<span>' + (r.blockName || '代码块') + '</span>'
-                    + '<span>第 ' + r.start + '–' + r.end + ' 行</span>'
+                    + (r.start ? '<span>第 ' + r.start + '–' + r.end + ' 行</span>' : '')
                     + (r.claimedLine && r.claimedLine !== r.start ? '<span>（模型原称第 ' + r.claimedLine + ' 行）</span>' : '')
                     + '</div>'
                     + (r.desc ? '<div class="fixlog-meta">' + escapeFixLog(r.desc) + '</div>' : '')
+                    + reasonText
                     + diff
-                    + '<div class="fixlog-actions"><button data-act="toggle" data-id="' + r.id + '">' + act + '</button></div>'
+                    + (act ? '<div class="fixlog-actions"><button data-act="toggle" data-id="' + r.id + '">' + act + '</button></div>' : '')
                     + '</div>';
             }).join('');
         }
+
+        /** 未采纳原因 → 人话（集中一处，改文案只改这里） */
+        const REJECT_REASON_TEXT = {
+            'ineffective': '复检显示这条问题仍存在，改了等于没改',
+            'no-substantive-change': '与原代码没有实质差别（可能只是重排或加注释）',
+            'anchor-not-found': '在原始代码里找不到要替换的片段',
+            'anchor-ambiguous': '同一片段出现多处，无法判断该改哪一处',
+            'line-mode-disabled': '本次使用了代码压缩，行号不可信且缺少锚点',
+            'overlap': '与另一条修复的区间重叠',
+            'out-of-range': '行号越界',
+        };
 
         function escapeFixLog(s) {
             return String(s == null ? '' : s)
@@ -4986,6 +5517,11 @@
         function toggleFix(id) {
             const rec = state.quality.fixLog.find(r => r.id === id);
             if (!rec) return;
+            // 已丢弃的修复从未写进代码，没有可回滚/可应用的东西
+            if (rec.state === 'rejected') {
+                showStatus('⚠️ 这条修复未采纳（复检未通过或没有把握定位），无需回滚', 'warning');
+                return;
+            }
             // 记录属于某个会话，跨会话操作必然改错位置 → 直接拒绝
             if (rec.convId !== (state.currentConvId || null)) {
                 showStatus('⚠️ 这条修复记录属于另一个会话，请切回原会话再操作', 'warning');
@@ -5054,11 +5590,28 @@
          * @returns {{code:string|null, applied:Array, skipped:Array,
          *            ineffective:Array, discarded:boolean}}
          */
+        /** 构造一条"被丢弃"的记录（复用修复记录的渲染，但要标清原因） */
+        function rejectEntry(applied, reason, label) {
+            return {
+                issue: applied.issue,
+                mode: applied.mode || 'anchor',
+                start: applied.start || 0,
+                end: applied.end || 0,
+                claimedLine: applied.claimedLine,
+                // 展示"本来想怎么改"，方便人工判断
+                before: applied.before || (applied.issue && applied.issue.original) || '',
+                after: applied.after || (applied.issue && applied.issue.fix_code) || '',
+                reason,
+                verify: applied.verify || null,
+                label: label || '',
+            };
+        }
+
         function applyVerifiedFixes(code, issues, opts) {
             const first = applyFixesEx(code, issues, opts);
             const empty = {
                 code: null, applied: [], skipped: first.skipped,
-                ineffective: [], discarded: false,
+                ineffective: [], residue: [], rejected: [], discarded: false,
             };
             if (!first.applied.length) return empty;
 
@@ -5066,29 +5619,50 @@
             try {
                 if (window.DT && typeof window.DT.isSubstantiveChange === 'function'
                     && !window.DT.isSubstantiveChange(code, first.code)) {
-                    return { ...empty, discarded: true };
+                    // 整批都是假修复（只重排/加注释）→ 逐条留痕，否则用户只看到"没改"却不知为何
+                    const rej = first.applied.map(a => rejectEntry(a, 'no-substantive-change', '与原代码无实质差别'));
+                    return { ...empty, discarded: true, rejected: rej };
                 }
             } catch { /* DT 未就绪就跳过这项检查，不阻塞修复 */ }
 
-            // ③ 规则复检：逐条看问题是否真的消失
+            // ③ 规则复检：逐条看"我这一改有没有解决我这条问题"
+            //
+            // 关键：复检范围是**本次替换的那一小段**（a.after），不是整段代码。
+            // 原来用整段判定，同一段里若有第二处同类问题（如两个空 catch），
+            // 只修了其中一处的正确修复会被整段仍命中而误杀。
             const ineffective = [];
+            const residue = [];      // 本条修好了，但别处还有同类问题 → 只提示，不否弃
+            const rejected = [];     // 被丢弃的修复（留痕用，含原因）
             for (const a of first.applied) {
                 let v = null;
-                try { v = window.QT.verifyFix(first.code, a.issue); } catch { v = null; }
-                if (v && v.checkable && v.resolved === false) {
+                try { v = window.QT.verifyFix(first.code, a.issue, { scope: a.after }); } catch { v = null; }
+                a.verify = v ? {
+                    checkable: !!v.checkable,
+                    resolved: v.resolved,
+                    rule: v.rule || null,
+                    label: v.label || '',
+                    elsewhere: !!v.elsewhere,
+                } : null;
+                if (!v || !v.checkable) continue;
+                if (v.resolved === false) {
                     ineffective.push({ issue: a.issue, rule: v.rule, label: v.label });
+                    rejected.push(rejectEntry(a, 'ineffective', v.label));
+                } else if (v.elsewhere) {
+                    residue.push({ issue: a.issue, rule: v.rule, label: v.label });
                 }
             }
-            if (!ineffective.length) return { ...first, ineffective, discarded: false };
+            if (!ineffective.length) {
+                return { ...first, ineffective, residue, rejected, discarded: false };
+            }
 
             // 剔除"修了也没解决"的，用剩下的重新应用（一次即可，不做循环重试）
             const bad = new Set(ineffective.map(x => x.issue));
             const remaining = (issues || []).filter(i => !bad.has(i));
-            if (!remaining.length) return { ...empty, ineffective };
+            if (!remaining.length) return { ...empty, ineffective, residue, rejected };
 
             const second = applyFixesEx(code, remaining, opts);
-            if (!second.applied.length) return { ...empty, ineffective };
-            return { ...second, ineffective, discarded: false };
+            if (!second.applied.length) return { ...empty, ineffective, residue, rejected };
+            return { ...second, ineffective, residue, rejected, discarded: false };
         }
 
         /* ==================== 挂载历史会话的项目（2026-10-25 第 2 步） ====================
@@ -6653,6 +7227,25 @@ async function callReviewApi(code, language) {
                             const fix = applyVerifiedFixes(b.code, high, {
                                 allowLineMode: !REVIEW_PRE_CHECK,
                             });
+                            // 被丢弃的修复也留痕（第 3 步）：否则用户只看到"没改"，
+                            // 不知道是"没有把握定位"还是"改完复检没通过"。
+                            // 定位失败而跳过的也留痕：用户需要知道"这 3 条为什么没修"
+                            if (fix.skipped && fix.skipped.length) {
+                                pushFixLog(fix.skipped.map(s => ({
+                                    issue: s.issue,
+                                    mode: 'anchor',
+                                    start: 0, end: 0,
+                                    before: (s.issue && s.issue.original) || '',
+                                    after: (s.issue && s.issue.fix_code) || '',
+                                    reason: s.reason,
+                                    fromSkip: true,
+                                })), { blockKey: blockKey(b), blockName: b.name, state: 'rejected' });
+                            }
+                            if (fix.rejected && fix.rejected.length) {
+                                pushFixLog(fix.rejected, {
+                                    blockKey: blockKey(b), blockName: b.name, state: 'rejected',
+                                });
+                            }
                             if (fix.discarded) {
                                 stat.discarded++;
                                 showStatus(
@@ -6668,6 +7261,16 @@ async function callReviewApi(code, language) {
                                     + (labels.length ? `（复检仍命中：${labels.join('、')}）` : '')
                                     + '，已丢弃，请人工处理',
                                     'warning'
+                                );
+                            }
+                            // 本条修好了、但别处还有同类问题：只提示，不否弃这条修复
+                            if (fix.residue && fix.residue.length) {
+                                const labels = [...new Set(fix.residue.map(x => x.label).filter(Boolean))];
+                                showStatus(
+                                    `ℹ️ 本次修复已生效，但代码里别处还有 ${fix.residue.length} 处同类问题`
+                                    + (labels.length ? `（${labels.join('、')}）` : '')
+                                    + '，未自动处理',
+                                    'info'
                                 );
                             }
                             if (fix.skipped.length) {
@@ -8462,11 +9065,22 @@ async function callReviewApi(code, language) {
 
         /** 模式切换：只有「需求工作流」模式才显示三层输入 */
         function syncReqPanel() {
+            // 小白档不进需求工作流（已确认决策 2：小白只用简版向导）。
+            // idle（没有生成进行中）时把 mode 归回 smart，否则会出现
+            // 「三层表单被档位藏住、发送却走工作流分支」的死胡同。
+            // 生成进行中（stage 非 idle）绝不动 mode —— 档位不打断进行中的流程。
+            if (state.config.tier === 'novice' && state.config.mode === 'workflow'
+                && (state.workflow.stage || 'idle') === 'idle') {
+                state.config.mode = 'smart';
+                if (els.modeSel) els.modeSel.value = 'smart';
+            }
             const on = state.config.mode === 'workflow';
             els.reqPanel.style.display = on ? '' : 'none';
             els.messageInput.placeholder = on
                 ? '补充说明（可选，随需求一起提交）'
-                : '输入消息，Ctrl+Enter 发送';
+                : (state.config.tier === 'novice'
+                    ? '用大白话说说你想要什么，Ctrl+Enter 发送'
+                    : '输入消息，Ctrl+Enter 发送');
             updateSendBtnState();
         }
 
@@ -8751,6 +9365,76 @@ async function callReviewApi(code, language) {
                 saveAll();
             });
 
+            // ---------- 档位（第 0 层）----------
+            // 切换档位：切到程序员立即全显；切到小白给一句温和确认（高级项会被收起）。
+            // 确认文案刻意强调"不影响已生成的内容" —— 档位从不重置会话。
+            els.tierSel.addEventListener('change', () => {
+                const next = normalizeTier(els.tierSel.value);
+                if (next === state.config.tier) return;
+                if (next === 'novice') {
+                    const go = window.confirm(
+                        '切换到编程小白模式后会隐藏高级选项（质量闸门保持强制开启），' +
+                        '不影响已生成的内容。确定切换吗？');
+                    if (!go) { els.tierSel.value = state.config.tier; return; }
+                }
+                setTier(next);
+            });
+
+            // 欢迎层：点卡片即选档位（全新用户只有这一条路，选完永久写入 config）
+            els.tierWelcome.addEventListener('click', (e) => {
+                const card = e.target.closest('.tw-card');
+                if (!card) return;
+                setTier(card.dataset.tier);
+            });
+
+            // 小白向导：类型一键选（写运行时态，不持久化）；换类型 → 旧追问作废
+            els.nwTypes.addEventListener('click', (e) => {
+                const b = e.target.closest('.nw-type');
+                if (!b) return;
+                state.noviceType = b.dataset.type || 'other';
+                els.nwTypes.querySelectorAll('.nw-type').forEach(x => x.classList.toggle('active', x === b));
+                resetNoviceAsk();
+            });
+            // 描述为空时按钮禁用（HTML 里初始即 disabled）；改描述 → 旧追问作废
+            els.nwDesc.addEventListener('input', () => {
+                els.nwGoBtn.disabled = !(els.nwDesc.value || '').trim();
+                resetNoviceAsk();
+            });
+            // 开始生成：先在向导内做「温和追问」（最多 2 问，方案 §3.2），
+            // 没问题 / 都答过了才真正发送（走 smart 现有管道 —— 决策 3）
+            els.nwGoBtn.addEventListener('click', () => {
+                const text = buildNoviceMessage();
+                if (!text) return;   // 按钮已按空描述禁用，这里再兜一层
+                const left = pickNoviceQuestions((els.nwDesc.value || '').trim(), state.noviceType)
+                    .filter(q => !state.noviceAnswers[q.key]);
+                if (left.length) { renderNoviceQuestions(left); return; }
+                sendNovice();
+            });
+            // 追问气泡：一键作答（答完即生成）/ 跳过直接生成
+            els.nwAsk.addEventListener('click', (e) => {
+                if (e.target.closest('.nw-skip')) { sendNovice(); return; }
+                const chip = e.target.closest('.nw-q-chip');
+                if (!chip) return;
+                state.noviceAnswers[chip.dataset.k] = chip.dataset.v;
+                // 同一问的其它选项取消高亮（本问在重渲染后会消失，这里只保证即时反馈）
+                chip.parentNode.querySelectorAll('.nw-q-chip')
+                    .forEach(x => x.classList.toggle('active', x === chip));
+                const left = pickNoviceQuestions((els.nwDesc.value || '').trim(), state.noviceType)
+                    .filter(q => !state.noviceAnswers[q.key]);
+                if (left.length) { renderNoviceQuestions(left); return; }
+                sendNovice();   // 答完即生成
+            });
+            // 「高级模式 ▸」：临时展开，不动 tier 持久值（刷新即收回）
+            els.nwAdvBtn.addEventListener('click', () => {
+                tierExpanded = !tierExpanded;
+                applyTierGating();
+            });
+            // 工具条「更多」：同一个展开态的另一个入口（会话进行中向导不在时用它）
+            els.tierMoreBtn.addEventListener('click', () => {
+                tierExpanded = !tierExpanded;
+                applyTierGating();
+            });
+
             // ---------- 结构化需求三层输入 ----------
             els.reqCollapseBtn.addEventListener('click', () => {
                 setReqCollapsed(!state.config.reqCollapsed);
@@ -8834,6 +9518,7 @@ async function callReviewApi(code, language) {
 
             // ---------- 质量闸门开关 ----------
             els.qualityBtn.addEventListener('click', () => {
+                if (tierGuard('质量闸门')) return;   // 小白档强制开启（安全铁律）
                 state.config.qualityEnabled = !(state.config.qualityEnabled !== false);
                 saveAll();
                 syncQualityBtns();
@@ -8846,6 +9531,7 @@ async function callReviewApi(code, language) {
             });
 
             els.qualityReviewBtn.addEventListener('click', () => {
+                if (tierGuard('小模型审查')) return;   // 小白档强制开启（安全铁律）
                 state.config.qualityReview = !(state.config.qualityReview !== false);
                 saveAll();
                 syncQualityBtns();
@@ -8858,6 +9544,7 @@ async function callReviewApi(code, language) {
             });
 
             els.dualRepairBtn.addEventListener('click', () => {
+                if (tierGuard('一致性自动对齐')) return;   // 小白档强制开启（安全铁律）
                 state.config.dualAutoRepair = !(state.config.dualAutoRepair !== false);
                 saveAll();
                 syncQualityBtns();
@@ -9098,6 +9785,10 @@ async function callReviewApi(code, language) {
             syncReqUI();
             syncReqPanel();
 
+            // 档位（第 0 层，2026-10-26）：欢迎层判定（全新用户才弹）+
+            // 按档位收放控件 + 小白强制质检。放在 i18n 之前：先渲染中文再统一换语言。
+            initTier();
+
             // 语言（2026-10-23）：模块脚本已就绪，恢复上次选择并重刷界面文案。
             // 放在 syncReq 之后：先让各面板渲染出自己的中文，再统一换成当前语言。
             try {
@@ -9153,6 +9844,35 @@ async function callReviewApi(code, language) {
                     app: els.app
                 }
                 };
+
+            /**
+             * 档位（第 0 层）自检入口（2026-10-26）：测试与浏览器控制台都能驱动。
+             * 注意 set 不带确认 —— 确认弹窗只在顶栏选择器的交互路径上（测试可绕开 window.confirm）。
+             */
+            window.__tier = {
+                get: () => state.config.tier,
+                set: setTier,
+                normalize: normalizeTier,
+                apply: applyTierGating,
+                expanded: () => tierExpanded,
+                toggle: () => { tierExpanded = !tierExpanded; applyTierGating(); },
+                welcome: () => els.tierWelcome,
+                welcomeNeeded: tierWelcomeNeeded,
+                wizard: {
+                    compose: buildNoviceMessage,
+                    panel: els.noviceWizard,
+                    type: () => state.noviceType,
+                    types: NOVICE_TYPES,
+                    // 温和追问（方案 §3.2）：问答规则与气泡容器
+                    questions: pickNoviceQuestions,
+                    answers: () => state.noviceAnswers,
+                    ask: els.nwAsk,
+                    resetAsk: resetNoviceAsk,
+                    send: sendNovice
+                },
+                sel: els.tierSel,
+                tools: { keep: TIER_TOOL_KEEP, more: TIER_TOOL_MORE, hide: TIER_TOOL_HIDE }
+            };
 
             /**
              * 项目资产持久化的自检入口（2026-10-25 第 1 步）。
