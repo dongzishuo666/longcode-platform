@@ -93,7 +93,7 @@
                                         └────────────────────┘
 ```
 
-- **前端**：单文件 SPA（`index.html`）+ 纯函数 ES Module（`quality-text.mjs` / `dual-text.mjs`），零构建步骤。
+- **前端**：单文件 SPA（`index.html`）+ 纯函数 ES Module（`quality-text.mjs` / `dual-text.mjs` / `quality-gate.mjs` / `quality-orchestrator.mjs` / `quality-state.mjs`），零构建步骤。
 - **后端**：Node / Fastify 代理，仅转发请求；核心能力（质量闸门、契约逻辑）在前端编排，后端提供 8 个无状态端点：
   `health / chat / test / title / review / static-check / extract-api / consistency`。
 - **零 token 闸门**（`static-check` / `extract-api` / `consistency`）由后端用 Tree-sitter wasm 在本地计算，不调模型。

@@ -2914,6 +2914,25 @@
         import * as I18N from './i18n.mjs';
         window.I18N = I18N;
     </script>
+    <!-- 质量闸门的 I/O 边界（R1 第一步，2026-10-26）：模块脚本只把工厂挂到 window，
+         由下面的经典脚本用自己的依赖实例化 —— 经典脚本不能写 import，
+         模块里的 const 经典脚本也看不见。jsdom 不执行模块脚本，
+         测试侧由 _deploy/jsdom-boot.mjs 注入同一个工厂。 -->
+    <script type="module">
+        import { createQualityGate } from './quality-orchestrator.mjs';
+        window.createQualityGate = createQualityGate;
+    </script>
+    <!-- 质量闸门的状态门面（R1 第二步）：把 state.quality 的读写收口成方法，
+         主循环只表达"发生了什么"。同样只挂工厂，由经典脚本注入状态与常量。 -->
+    <script type="module">
+        import { createQualityState } from './quality-state.mjs';
+        window.createQualityState = createQualityState;
+    </script>
+    <!-- 质量闸门主循环（R1 第三步）：8 分支状态机也搬出单体，同样只挂工厂。 -->
+    <script type="module">
+        import { createQualityGateLoop } from './quality-gate.mjs';
+        window.createQualityGateLoop = createQualityGateLoop;
+    </script>
     <script>
         // ==================== 全局状态 ====================
         const state = {
@@ -6861,18 +6880,9 @@
         //   ③ 通过 → 提取符号进全局符号表，作为后续段审查的「接口是否存在」依据
         //   ④ 审查连续异常 2 段 → 自动降级为纯静态校验（不阻塞生成）
 
-        /** 登记「已处理」指纹；超过上限时淘汰最早的一批（Set 迭代顺序 = 插入顺序） */
+        /** 登记「已处理」指纹（淘汰策略在 quality-state.mjs 的 touchProcessed） */
         function markProcessed(key) {
-            const p = state.quality.processed;
-            if (p.size >= QUALITY_PROCESSED_MAX) {
-                const it = p.values();
-                for (let i = 0; i < Math.ceil(QUALITY_PROCESSED_MAX / 4); i++) {
-                    const v = it.next();
-                    if (v.done) break;
-                    p.delete(v.value);
-                }
-            }
-            p.add(key);
+            qualityState().touchProcessed(key);
         }
 
         /**
@@ -6981,353 +6991,118 @@
                 markProcessed(blockKey(b));
             }
             if (blocks.length) {
-                state.quality.lastBoundary =
-                    tailLines(blocks[blocks.length - 1].code, QUALITY_BOUNDARY_LINES);
+                qualityState().setLastBoundary(
+                    tailLines(blocks[blocks.length - 1].code, QUALITY_BOUNDARY_LINES));
             }
         }
 
-        /**
-         * 零 token 静态校验（本地 Tree-sitter，不消耗任何 token）。
-         *
-         * 429 / 503 会重试：nginx 对 /api/static-check 是 2r/s burst 6 的限流，
-         * 双端并行生成时两个闸门叠加很容易踩线（线上实测踩到过，见 longcode_heavy zone）。
-         * 直接返回 null 会让该代码块【绕过全部检查】——语法错误、符号冲突、安全风险
-         * 全都静默漏掉，比慢一点严重得多。因此这里按指数退避重试几次，
-         * 只有持续失败才放弃（此时调用方按 null 处理，但已重试过）。
-         */
-        async function callStaticCheck(code, language, file) {
-            const url = `${state.config.apiBase}/static-check`;
-            const body = JSON.stringify({
-                code,
-                language,
-                // 判重范围按文件维度：同文件符号 + 跨文件导出符号
-                globalSymbols: globalSymbolsFor(file),
-                compress: false
+        // ==================== 质量闸门的 I/O 边界（R1 第一步，2026-10-26）====================
+        // 静态校验 / 小模型审查 / 静默打回重生成 + 修复提示词，已抽到 quality-orchestrator.mjs
+        //（那边不依赖 window/document/state，Node 单测直接 import + mock 依赖即可）。
+        // 这里只做实例化与薄包装：调用点签名完全不变（...a 透传），主循环零改动。
+        // 依赖一律用函数形式注入 —— 切供应商 / 改 Key / 换模型立即生效，不用重建实例。
+        let __qg = null;
+        function qualityGate() {
+            if (__qg) return __qg;
+            const factory = window.createQualityGate;
+            // 模块脚本没加载上（部署漏拷贝 / jsdom 未注入）时，明确报错而不是
+            // 让闸门在 "undefined is not a function" 里静默失效
+            if (!factory) throw new Error('quality-orchestrator.mjs 未加载（window.createQualityGate 缺失）');
+            __qg = factory({
+                config: () => state.config,
+                lastBoundary: () => state.quality.lastBoundary,
+                symbolTableText: () => symbolTableText(),
+                globalSymbolsFor: (file) => globalSymbolsFor(file),
+                preCheck: () => REVIEW_PRE_CHECK,
+                fetchWithTimeout: (url, opts, ms) => fetchWithTimeout(url, opts, ms),
+                apiHeaders: () => apiHeaders(),
+                streamRequest: (msgs, ov, opt) => streamRequest(msgs, ov, opt),
+                toRequestMessages: (conv) => toRequestMessages(conv),
+                extractCodeBlocks: (content) => extractCodeBlocks(content)
             });
-            const delays = [0, 800, 2500];
-            for (let attempt = 0; attempt < delays.length; attempt++) {
-                if (delays[attempt]) await new Promise((r) => setTimeout(r, delays[attempt]));
-                try {
-                    // 10s：本地 Tree-sitter 解析正常 <1s；10s 已留足余量。
-                    // 超时按网络失败走同一路径（退避重试 → 最终 return null），
-                    // 不会让调用方拿到"半截结果"。
-                    const resp = await fetchWithTimeout(
-                        url, { method: 'POST', headers: apiHeaders(), body }, 10000
-                    );
-                    // 限流 / 过载：退避后重试；其它 4xx/5xx 是请求本身有问题，重试无意义
-                    if (resp.status === 429 || resp.status === 503) continue;
-                    if (!resp.ok) return null;
-                    return await resp.json();
-                } catch (e) {
-                    // 网络层异常：同样退避重试
-                    continue;
+            return __qg;
+        }
+        // 必须是【函数声明】而非 const 箭头函数：
+        //   ① 声明会挂到 window，内部调用也走全局绑定 —— 测试靠 `win.callStaticCheck = 桩`
+        //      覆盖它（test_autocontinue_smoke / test_fetch_timeout / test_stream_progress 都依赖这一点）；
+        //   ② const 不会挂 window，覆盖只会造出一个页面读不到的影子属性，测试会静默失真。
+        async function callStaticCheck(...a) { return qualityGate().callStaticCheck(...a); }
+        async function callReviewApi(...a) { return qualityGate().callReviewApi(...a); }
+        async function requestFix(...a) { return qualityGate().requestFix(...a); }
+
+        // ---------- 质量闸门的状态门面（R1 第二步，2026-10-26）----------
+        // 主循环里原本散落着 state.quality.{enabled,review,degraded,failStreak,
+        // backfilled,processed,lastBoundary} 的直接读写；现在全部走这 9 个方法。
+        // 好处：① 读主循环只需要知道"发生了什么"，不用追字段赋值；
+        //      ② 上限/阈值仍由 index.html 的 QUALITY_* 常量单源注入。
+        // 注意：resetQuality / hydrateQuality / 修复记录 仍直接操作 state.quality ——
+        // 那是【会话级资产持久化】，不是闸门运行态，刻意不塞进这个门面。
+        let __qs = null;
+        function qualityState() {
+            if (__qs) return __qs;
+            const factory = window.createQualityState;
+            if (!factory) throw new Error('quality-state.mjs 未加载（window.createQualityState 缺失）');
+            __qs = factory(() => state.quality, {
+                processedMax: QUALITY_PROCESSED_MAX,
+                degradeStreak: QUALITY_DEGRADE_STREAK
+            });
+            return __qs;
+        }
+
+        /**
+         * 审查是否启用前置压缩（preCheck）。
+         *
+         * 必须是 false：压缩会删注释、压空行，行号随之改变，而修复要用行号/锚点
+         * 去切【原始】代码。改这个值会同时关闭"按行号修补"的兜底（applyFixesEx 的
+         * allowLineMode），只保留按内容锚定 —— 见 QUALITY 修复处的注释。
+         *
+         * 单一来源：orchestrator 的 preCheck 由这里以函数形式注入，
+         * 不要在 mjs 里再写一份（两处真源会让"改了这个值"只生效一半）。
+         */
+        const REVIEW_PRE_CHECK = false;
+
+        // ==================== 质量闸门主循环（R1 第三步，2026-10-26）====================
+        // 8 分支状态机已搬到 quality-gate.mjs；这里只做实例化 + 薄包装。
+        // 依赖一律用箭头包一层：测试会在 boot 之后覆盖 win.showStatus / renderMessages /
+        // callStaticCheck，箭头在【调用时】解析全局绑定，覆盖才生效（捕获稳定引用会静默失效）。
+        let __gateLoop = null;
+        function qualityLoop() {
+            if (__gateLoop) return __gateLoop;
+            const factory = window.createQualityGateLoop;
+            if (!factory) throw new Error('quality-gate.mjs 未加载（window.createQualityGateLoop 缺失）');
+            __gateLoop = factory({
+                qs: qualityState(),
+                staticCheck: (...a) => callStaticCheck(...a),
+                review: (...a) => callReviewApi(...a),
+                requestFix: (...a) => requestFix(...a),
+                backfillSymbols: (conv) => backfillSymbols(conv),
+                normalizeLang: (l) => normalizeLang(l),
+                blockKey: (b) => blockKey(b),
+                replaceBlockAt: (c, b, code, d) => replaceBlockAt(c, b, code, d),
+                mergeSymbols: (s, name) => mergeSymbols(s, name),
+                tailLines: (code, n) => tailLines(code, n),
+                applyVerifiedFixes: (code, issues, opts) => applyVerifiedFixes(code, issues, opts),
+                pushFixLog: (entries, meta) => pushFixLog(entries, meta),
+                showStatus: (t, lv) => showStatus(t, lv),
+                saveAll: () => saveAll(),
+                renderMessages: () => renderMessages(),
+                isStopped: () => state.stopFlag,
+                config: () => state.config,
+                preCheck: () => REVIEW_PRE_CHECK,
+                limits: {
+                    maxBlockBytes: QUALITY_MAX_BLOCK_BYTES,
+                    maxFixRetry: QUALITY_MAX_FIX_RETRY,
+                    boundaryLines: QUALITY_BOUNDARY_LINES
                 }
-            }
-            return null;
+            });
+            return __gateLoop;
         }
-
-        /** 小模型审查（消耗 token；仅在闸门开启且未降级时调用，模型走后端默认快模型） */
         /**
- * 审查是否启用前置压缩（preCheck）。
- *
- * 必须是 false：压缩会删注释、压空行，行号随之改变，而修复要用行号/锚点
- * 去切【原始】代码。改这个值会同时关闭"按行号修补"的兜底（applyFixesEx 的
- * allowLineMode），只保留按内容锚定 —— 见 QUALITY 修复处的注释。
- */
-const REVIEW_PRE_CHECK = false;
-
-async function callReviewApi(code, language) {
-            try {
-                const resp = await fetchWithTimeout(`${state.config.apiBase}/review`, {
-                    method: 'POST',
-                    headers: apiHeaders(),
-                    body: JSON.stringify({
-                        apiKey: state.config.apiKey,
-                        provider: state.config.provider,
-                        apiBase: state.config.providerBase || '',
-                        // 审查刻意用「快模型」：预设供应商下不传 model，让后端按供应商
-                        // 给默认快模型（deepseek-flash / gpt-4o-mini …），省时省钱。
-                        // 只有自定义供应商 —— 后端猜不出该用哪个 —— 才把用户填的带上。
-                        ...(state.config.provider === 'custom'
-                            ? { model: state.config.model }
-                            : {}),
-                        language,
-                        symbolTable: symbolTableText(),
-                        boundaryContext: state.quality.lastBoundary,
-                        // 必须显式关闭前置压缩（后端默认已是 false，这里是双保险）：
-                        // 一旦为 true，后端会先删注释 / 压空行再送模型，行数随之变化，
-                        // 模型返回的行号就成了压缩后坐标；而修复靠行号去切【原始】代码
-                        // → 修改落到错误位置。
-                        // 2026-10-25：这个值不再只是"约定"，它同时传给 applyFixesEx 的
-                        // allowLineMode —— 开了压缩就禁止按行号修补，只能靠 original 锚点。
-                        preCheck: REVIEW_PRE_CHECK,
-                        code
-                    })
-                    // 15s：后端自身 timeoutMs 默认 1500ms，这里留 10 倍余量。
-                    // 后端超时会返回 200 + degraded，不会挂住；挂住的是网络层。
-                }, 15000);
-                if (!resp.ok) return null;
-                return await resp.json();
-            } catch (e) {
-                return null;
-            }
-        }
-
-        /** 构造「打回重生成」提示：只发错误块 + 精确错误定位，不重发全文 */
-        function buildFixPrompt(block, errors, language) {
-            const loc = (errors || []).slice(0, 8)
-                .map(e => `- 第 ${e.line} 行第 ${e.col} 列：${e.message}`)
-                .join('\n');
-            return [
-                `下面这段 ${language} 代码有语法错误，请修复并【完整重新输出该文件的代码】。`,
-                '',
-                `文件：${block.name || '(未命名)'}`,
-                '',
-                '语法错误位置：',
-                loc || '- （未定位到具体位置，请仔细检查整体结构）',
-                '',
-                '待修复代码：',
-                '```' + (block.lang || language),
-                block.code,
-                '```',
-                '',
-                '【要求】',
-                '1. 只输出这一个文件的完整代码，放在代码块内，不要解释、不要输出其他文件。',
-                '2. 修复全部语法错误（括号 / 分号 / 缩进 / 关键字等），保持原有功能与命名不变。',
-                '3. 代码块必须指定语言且完整闭合。'
-            ].join('\n');
-        }
-
-        /** 静默请求一次修复（不渲染到对话界面） */
-        async function requestFix(conv, block, errors, language) {
-            // 先过滤报告，再丢掉最后一条（正在修的代码消息）：
-            // 过滤后最后一个才是代码消息，直接 slice(-1) 会误删
-            const base = toRequestMessages(conv);
-            const msgs = [
-                ...base.slice(0, -1),
-                { role: 'user', content: buildFixPrompt(block, errors, language) }
-            ];
-            const r = await streamRequest(msgs, { temperature: 0.2 }, { silent: true });
-            if (r.errorCode) return null;
-            const blocks = extractCodeBlocks(r.content);
-            return blocks.length ? blocks[0].code : null;
-        }
-
-        /**
-         * 对新产出的代码块跑一遍质量闸门。
-         * 已处理过的块靠指纹跳过；未闭合的块等续写完成后再校验（避免半截代码误报）。
-         * @returns {{checked:number, fixed:number, blocked:number, issues:number}}
+         * 对新产出的代码块跑一遍质量闸门（实现在 quality-gate.mjs）。
+         * 保持【函数声明】：挂 window 才能被既有套件覆盖，也供 __quality 导出。
          */
         async function runQualityGate(conv, blocks) {
-            const stat = { checked: 0, fixed: 0, blocked: 0, issues: 0, security: 0 };
-            if (!state.quality.enabled || !blocks || !blocks.length) return stat;
-
-            const lastMsg = conv.messages[conv.messages.length - 1];
-            if (!lastMsg || typeof lastMsg.content !== 'string') return stat;
-
-            // 首次进入（含刷新页面后）先把历史代码的符号补进符号表，
-            // 否则符号表为空会让后续审查误报「符号未定义」
-            if (!state.quality.backfilled) {
-                state.quality.backfilled = true;
-                await backfillSymbols(conv);
-            }
-
-            const fresh = blocks.filter(
-                b => !b.truncated && !state.quality.processed.has(blockKey(b))
-            );
-            if (!fresh.length) return stat;
-
-            let content = lastMsg.content;
-            let dirty = false;
-            // 同一轮闸门里可能修多个块：每次替换都会改变后续块的绝对位置，
-            // 用 delta 累计位移，保证后面的块仍按正确偏移写回。
-            let delta = 0;
-
-            // 按起点升序处理，delta 才是单调递增的
-            const ordered = fresh.slice().sort((a, b) => (a.start || 0) - (b.start || 0));
-
-            for (const b of ordered) {
-                if (state.stopFlag) break;
-                markProcessed(blockKey(b));
-
-                const lang = normalizeLang(b.lang);
-                // 纯文本 / markdown 不校验；超大块不送审（避免超时与浪费 token）
-                if (!lang || lang === 'text' || lang === 'markdown') continue;
-                if ((b.code || '').length > QUALITY_MAX_BLOCK_BYTES) continue;
-                stat.checked++;
-
-                // ---------- ① 零 token 静态校验 ----------
-                let st = await callStaticCheck(b.code, lang, b.name);
-                if (st && st.supported && st.syntax && st.syntax.errorCount > 0) {
-                    showStatus(`🔧 发现语法错误，正在修复 ${b.name || '代码块'}...`);
-                    for (let retry = 0; retry < QUALITY_MAX_FIX_RETRY; retry++) {
-                        const fixedCode = await requestFix(conv, b, st.syntax.errors, lang);
-                        if (!fixedCode) break;
-                        const re = await callStaticCheck(fixedCode, lang, b.name);
-                        // 只有「修完确实没语法错」才采纳，否则继续重试
-                        if (re && re.supported && re.syntax && re.syntax.errorCount === 0) {
-                            const md = replaceBlockAt(content, b, fixedCode, delta);
-                            if (md) {
-                                delta += fixedCode.length - (b.end - b.start);
-                                content = md; b.code = fixedCode; dirty = true;
-                                st = re; stat.fixed++;
-                            }
-                            break;
-                        }
-                    }
-                    if (st.supported && st.syntax && st.syntax.errorCount > 0) {
-                        stat.blocked++;
-                        showStatus(`⚠️ ${b.name || '代码块'} 仍有语法错误（已保留原样）`, 'warning');
-                    }
-                }
-                if (st && st.symbols) mergeSymbols(st.symbols, b.name);
-
-                // ---------- ①b 安全基线检测（只报告，不自动修） ----------
-                // 后端 checkSecurity 是零 token 纯模式匹配，高精度优先。
-                // 刻意不接入 applyFixes：安全类误改代码的代价比漏报高得多，
-                // 交给用户判断（模型侧另有 review.js 的安全清单做上下文相关的判断）。
-                //
-                // ⚠ st 可能为 null：限流（429）/ 网络抖动时 callStaticCheck 返回 null。
-                //   早期这里漏了 `st &&`，null.security 直接抛 TypeError，异常一路上抛到
-                //   没有 try/catch 的 runDualGeneration，变成 unhandled rejection ——
-                //   isGenerating 永为真、状态栏永远停在「并行生成中」，表现为"卡住"。
-                if (st && Array.isArray(st.security) && st.security.length) {
-                    stat.security += st.security.length;
-                    const top = st.security[0];
-                    const more = st.security.length > 1 ? ` 等 ${st.security.length} 处` : '';
-                    showStatus(
-                        `⚠️ ${b.name || '代码块'} 第 ${top.line} 行：${top.message}${more}（未自动修改）`,
-                        'warning'
-                    );
-                }
-
-                // ---------- ② 小模型审查 ----------
-                if (state.quality.review && !state.quality.degraded) {
-                    const rev = await callReviewApi(b.code, lang);
-                    if (!rev || rev.error || rev.degraded) {
-                        state.quality.failStreak++;
-                        if (state.quality.failStreak >= QUALITY_DEGRADE_STREAK) {
-                            state.quality.degraded = true;
-                            showStatus('⚠️ 审查连续异常，已降级为纯静态校验', 'warning');
-                        }
-                    } else {
-                        state.quality.failStreak = 0;
-                        if (rev.blocked) {
-                            // 后端静态层判定语法不过（此时无 issues）
-                            stat.blocked++;
-                        }
-                        const issues = Array.isArray(rev.issues) ? rev.issues : [];
-                        stat.issues += issues.length;
-                        // 自动修只针对 high；标了 uncertain 的不自动改，避免误伤
-                        const high = issues.filter(i => i.severity === 'high' && !i.uncertain);
-                        if (high.length) {
-                            // 2026-10-25：走"锚定修复" —— 按 issue.original 在附近找真实位置，
-                            // 找不到/有歧义就不修（交人工），不再盲信模型给的行号。
-                            // 第 3 步：锚定 → 假修复检测 → 规则复检（语法复检在下面）
-                            const fix = applyVerifiedFixes(b.code, high, {
-                                allowLineMode: !REVIEW_PRE_CHECK,
-                            });
-                            // 被丢弃的修复也留痕（第 3 步）：否则用户只看到"没改"，
-                            // 不知道是"没有把握定位"还是"改完复检没通过"。
-                            // 定位失败而跳过的也留痕：用户需要知道"这 3 条为什么没修"
-                            if (fix.skipped && fix.skipped.length) {
-                                pushFixLog(fix.skipped.map(s => ({
-                                    issue: s.issue,
-                                    mode: 'anchor',
-                                    start: 0, end: 0,
-                                    before: (s.issue && s.issue.original) || '',
-                                    after: (s.issue && s.issue.fix_code) || '',
-                                    reason: s.reason,
-                                    fromSkip: true,
-                                })), { blockKey: blockKey(b), blockName: b.name, state: 'rejected' });
-                            }
-                            if (fix.rejected && fix.rejected.length) {
-                                pushFixLog(fix.rejected, {
-                                    blockKey: blockKey(b), blockName: b.name, state: 'rejected',
-                                });
-                            }
-                            if (fix.discarded) {
-                                stat.discarded++;
-                                showStatus(
-                                    '⚠️ 修正与原代码没有实质差别（可能只是重排/加注释），已丢弃本次修正',
-                                    'warning'
-                                );
-                            }
-                            if (fix.ineffective.length) {
-                                stat.ineffective += fix.ineffective.length;
-                                const labels = [...new Set(fix.ineffective.map(x => x.label).filter(Boolean))];
-                                showStatus(
-                                    `⚠️ ${fix.ineffective.length} 条修复没真正解决问题`
-                                    + (labels.length ? `（复检仍命中：${labels.join('、')}）` : '')
-                                    + '，已丢弃，请人工处理',
-                                    'warning'
-                                );
-                            }
-                            // 本条修好了、但别处还有同类问题：只提示，不否弃这条修复
-                            if (fix.residue && fix.residue.length) {
-                                const labels = [...new Set(fix.residue.map(x => x.label).filter(Boolean))];
-                                showStatus(
-                                    `ℹ️ 本次修复已生效，但代码里别处还有 ${fix.residue.length} 处同类问题`
-                                    + (labels.length ? `（${labels.join('、')}）` : '')
-                                    + '，未自动处理',
-                                    'info'
-                                );
-                            }
-                            if (fix.skipped.length) {
-                                // 让用户知道"有几条没自动改"以及为什么，而不是静默少修
-                                const why = fix.skipped.map(s => s.reason).join(',');
-                                stat.skipped += fix.skipped.length;
-                                showStatus(
-                                    `⚠️ 有 ${fix.skipped.length} 条修复无法安全定位（${why}），已保留原样待人工处理`,
-                                    'warning'
-                                );
-                            }
-                            if (fix.applied.length) {
-                                if (state.config.previewFixes) {
-                                    // 预览修复：只登记为「待确认」，不动代码。
-                                    // 用户在「修复记录」里逐条点「应用」才真正改。
-                                    pushFixLog(fix.applied, {
-                                        blockKey: blockKey(b), blockName: b.name, state: 'pending',
-                                    });
-                                    showStatus(
-                                        `👁 已暂存 ${fix.applied.length} 条修复，点「修复记录」确认应用`,
-                                        'info'
-                                    );
-                                } else {
-                                    const patched = fix.code;
-                                    // 修正后必须复校验：修坏了就丢弃这次修正
-                                    const re = await callStaticCheck(patched, lang, b.name);
-                                    if (re && re.supported && re.syntax && re.syntax.errorCount === 0) {
-                                        const md = replaceBlockAt(content, b, patched, delta);
-                                        if (md) {
-                                            delta += patched.length - (b.end - b.start);
-                                            content = md; b.code = patched; dirty = true;
-                                            stat.fixed += fix.applied.length;
-                                            // 留痕：记下 before/after，之后可逐条回滚
-                                            pushFixLog(fix.applied, {
-                                                blockKey: blockKey(b), blockName: b.name, state: 'applied',
-                                            });
-                                        }
-                                    } else {
-                                        showStatus('⚠️ 修正后语法校验未通过，已丢弃本次修正（原代码未改动）', 'warning');
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // ---------- ③ 更新边界上下文 ----------
-                state.quality.lastBoundary = tailLines(b.code, QUALITY_BOUNDARY_LINES);
-            }
-
-            if (dirty) {
-                lastMsg.content = content;
-                lastMsg.updatedAt = Date.now();
-                saveAll();
-                renderMessages();
-            }
-            return stat;
+            return qualityLoop().runQualityGate(conv, blocks);
         }
 
         /**
