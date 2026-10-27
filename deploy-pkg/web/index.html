@@ -2373,6 +2373,18 @@
                             <span class="tpl-desc">任务状态机、指派归属、只能改自己的</span>
                             <span class="tpl-tags"><b>状态机</b><b>归属</b><b>看板</b></span>
                         </button>
+                        <button type="button" class="tpl" data-preset="saas">
+                            <span class="tpl-ico">🏢</span>
+                            <span class="tpl-name">SaaS 多租户</span>
+                            <span class="tpl-desc">租户隔离、成员邀请与角色、按租户过滤所有查询</span>
+                            <span class="tpl-tags"><b>多租户</b><b>隔离</b><b>配额</b></span>
+                        </button>
+                        <button type="button" class="tpl" data-preset="custom">
+                            <span class="tpl-ico">✏️</span>
+                            <span class="tpl-name">从空白开始</span>
+                            <span class="tpl-desc">不套预设，自由描述你想要什么</span>
+                            <span class="tpl-tags"><b>自定义</b></span>
+                        </button>
                     </div>
 
                     <!-- 小白简版向导（2026-10-26 双模式档位）：类型一键 + 一句话大白话，
@@ -5947,18 +5959,23 @@
          *      它挂了生成必须照常进行（后端 recall 失败也返回空，双保险）；
          *   ③ 场景标签/关键词由 dual-text.mjs 从契约推导（纯函数，可单测）。
          */
-        async function prefetchMemories(spec, contract) {
+        async function prefetchMemories(spec, contract, queryOverride) {
             state.memories = '';
             state.appliedMemories = [];      // 本次注入的记忆（recurrence check 的对照基准）
+            // queryOverride（2026-10-27）：smart 模式没有 spec / 契约，需要「显式空查询」。
+            // 不能靠传 null 契约来得到空标签 —— inferSceneTags 无条件加「契约」标签，
+            // 而后端在「有标签」时会反向过滤（tagHits===0 && wordHits===0 → 丢弃），
+            // 结果只能命中带「契约」标签的记忆，等于白召回。
+            const query = queryOverride || {
+                stack: (spec && spec.stack) || '',
+                sceneTags: window.DT.inferSceneTags(contract || {}),
+                keywords: window.DT.contractKeywords(contract || {})
+            };
             try {
                 const resp = await fetchWithTimeout(`${state.config.apiBase}/memories/recall`, {
                     method: 'POST',
                     headers: apiHeaders(),
-                    body: JSON.stringify({
-                        stack: (spec && spec.stack) || '',
-                        sceneTags: window.DT.inferSceneTags(contract || {}),
-                        keywords: window.DT.contractKeywords(contract || {})
-                    })
+                    body: JSON.stringify(query)
                 }, 3000);
                 if (!resp.ok) return;
                 const data = await resp.json();
@@ -6016,6 +6033,36 @@
         /** prompt 拼上历史经验（放在最前面的「必须遵守」区）。无记忆时原样返回 */
         function withMemories(prompt) {
             return state.memories ? state.memories + '\n\n' + prompt : prompt;
+        }
+
+        // ---------- smart 模式的记忆注入（P1 修复 2026-10-27）----------
+        // 问题：smart 此前是零注入 —— 只有 workflow 的三条路径调 withMemories，
+        // 而小白档只能走 smart，结果「不让小白管理记忆」被顺手升级成「不让小白受益于记忆」。
+        // 管理与受益是两件事：记忆库按钮仍列在 TIER_TOOL_HIDE（小白看不到面板），
+        // 但 L1 硬约束必须进 prompt，否则小白生成的代码会重复踩已经沉淀过的坑。
+        //
+        // 长度保护：后端 MAX_SYSTEM_PROMPT_LEN=4000 是硬限，超了直接 400 INVALID_REQUEST。
+        // 记忆块最多 14 条（L1≤5/L2≤3/L3≤4/L4≤2）、单条 rule ≤500 字，理论上可达数千字，
+        // 所以先按行截断记忆（L1 排在最前 → 先保硬约束），再用 fitSystemPrompt 给用户
+        // 自定义提示词留余量。注：workflow 的 withMemories 路径没有这层保护（同样有潜在
+        // 风险，但不在本轮修复范围，改动它会变更四条 workflow 路径的 prompt 长度）。
+        const SMART_MEMORY_BUDGET = 2400;
+
+        function trimMemories(text) {
+            const s = String(text || '');
+            if (s.length <= SMART_MEMORY_BUDGET) return s;
+            const cut = s.slice(0, SMART_MEMORY_BUDGET);
+            const nl = cut.lastIndexOf('\n');
+            return (nl > 0 ? cut.slice(0, nl) : cut) + '\n（更多历史经验因长度省略）';
+        }
+
+        /** smart / 续写用的 systemPrompt：历史经验在前，用户自定义提示词在后 */
+        function smartSystemPrompt() {
+            const mem = trimMemories(state.memories);
+            const base = state.config.systemPrompt || '';
+            if (!mem) return base;
+            // 记忆当"固定部分"，用户提示词当"可截断部分"（两个都超时优先保记忆）
+            return fitSystemPrompt(mem, base, '（你的系统提示词过长已截断）');
         }
 
         // ==================== 数据中心 ====================
@@ -6152,6 +6199,64 @@
                 updateMemoryBadge();
                 showStatus(`🧠 校验偏差已沉淀 ${added} 条待确认记忆（记忆库面板可确认生效）`, 'info');
             }
+        }
+
+        /**
+         * smart 质检偏差 → 记忆候选（P2 修复 2026-10-27）。
+         *
+         * 背景：workflow 的偏差回流早就有（一致性校验 → autoCandidateMemories → 待确认），
+         * 但 smart 的质检发现（小模型审查 issue / 静态安全扫描）从不沉淀 ——
+         * 踩过的坑下次照踩。现在 runQualityGate 每轮把原始发现带回，这里转成候选。
+         *
+         * 与 autoCandidateMemories 同三条原则：
+         *   ① 一律 pending，人工确认才生效（误报变约束比没有记忆更糟）；
+         *   ② 去重交给后端 —— 审查类候选靠 sceneTags「review:<类型>」参与标签重合去重
+         *      （后端 ISSUE_TAG_MAP 只有一致性类型，留空等于不去重，每轮都会重复入库）；
+         *   ③ fire-and-forget，失败静默 —— 绝不拖慢或打断生成主流程。
+         * 同类聚合：每个类型最多 2 条、单轮最多 12 条（36 条 dto_missing 淹没待确认区的
+         * 教训不在这里重演）。
+         */
+        async function qualityFindingsToMemory(findings) {
+            try {
+                if (!findings || !findings.length) return;
+                const MAX_PER_TYPE = 2;
+                const MAX_TOTAL = 12;
+                const perType = new Map();
+                const cands = [];
+                for (const f of findings) {
+                    if (cands.length >= MAX_TOTAL) break;
+                    if (!f || !f.kind) continue;
+                    const typeKey = f.kind === 'security'
+                        ? 'security:' + ((f.item && f.item.rule) || 'risk')
+                        : 'review:' + ((f.issue && (f.issue.issue_type || f.issue.type)) || 'review');
+                    const n = perType.get(typeKey) || 0;
+                    if (n >= MAX_PER_TYPE) continue;
+                    perType.set(typeKey, n + 1);
+                    const cand = f.kind === 'security'
+                        ? window.DT.securityFindingToMemoryCandidate(f.item, f.blockName)
+                        : window.DT.reviewIssueToMemoryCandidate(f.issue, f.blockName);
+                    if (cand) cands.push({ ...cand, status: 'pending' });   // 自动候选必须人工确认
+                }
+                if (!cands.length) return;
+
+                let added = 0;
+                await Promise.all(cands.map(async (cand) => {
+                    try {
+                        const resp = await fetchWithTimeout(`${state.config.apiBase}/memories/ingest`, {
+                            method: 'POST', headers: apiHeaders(), body: JSON.stringify(cand)
+                        }, 5000);
+                        if (resp.ok) {
+                            const d = await resp.json();
+                            if (!d.duplicate) added++;
+                        }
+                    } catch { /* 单条失败不影响其他条 */ }
+                }));
+                if (added > 0) {
+                    state.pendingMemories = (state.pendingMemories || 0) + added;
+                    updateMemoryBadge();
+                    showStatus(`🧠 质检偏差已沉淀 ${added} 条待确认记忆（记忆库面板可确认生效）`, 'info');
+                }
+            } catch { /* 回流失败不影响任何流程 */ }
         }
 
         /** 工具条记忆按钮的待确认角标 */
@@ -6748,7 +6853,16 @@
                     try { console.warn('[项目上下文] 跳过：', _pctx.dropped); } catch { }
                 }
             }
-            const result = await streamRequest(_reqMsgs);
+            // 记忆注入（P1 修复 2026-10-27）：workflow 的三条路径早就预取 + 注入了，
+            // smart 一直是零注入。召回信号：smart 没有 spec/契约，显式传「空查询」——
+            // 后端 recallMemories 在「无标签也无关键词」时不施加关联过滤，
+            // 按分层上限（L1≤5/L2≤3/L3≤4/L4=2）返回得分最高的几条。
+            // 为什么必须显式传空：inferSceneTags({}) 会无条件带「契约」标签，
+            // 后端据此反向过滤，只能命中带该标签的记忆（实测等于召回不到东西）。
+            // 刻意不拿用户原文切词：关键词一旦切错，同一条反向过滤会把真正相关的记忆滤光。
+            // 失败/超时静默兜底为空，不影响生成。
+            await prefetchMemories(null, null, { stack: '', sceneTags: [], keywords: [] });
+            const result = await streamRequest(_reqMsgs, { systemPrompt: smartSystemPrompt() });
             
             // 保存首次回复
             conv.messages.push({
@@ -6819,7 +6933,11 @@
                     break;
                 }
 
-                const result = await streamRequest(continueMsgs);
+                // 记忆同样注入续写（P1 修复 2026-10-27）：
+                // 这里有两个调用方 —— smart 的续写与 workflow 单端生成的续写。
+                // state.memories 是本轮之前刚预取的（sendRequest / runCodeGeneration 里），
+                // 续写沿用同一份、不重复召回，保证同一轮生成内约束一致。
+                const result = await streamRequest(continueMsgs, { systemPrompt: smartSystemPrompt() });
                 accumulateUsage(usageStat, result.usage);
                 
                 // 拼接到最后一条助手消息（围栏未闭合时自动剥离重复的语言标记）
@@ -7100,9 +7218,13 @@
         /**
          * 对新产出的代码块跑一遍质量闸门（实现在 quality-gate.mjs）。
          * 保持【函数声明】：挂 window 才能被既有套件覆盖，也供 __quality 导出。
+         * P2 修复（2026-10-27）：每轮带回的原始发现（审查 issue / 安全扫描）
+         * 在这里回流成记忆候选 —— fire-and-forget，不 await，不阻塞主流程。
          */
         async function runQualityGate(conv, blocks) {
-            return qualityLoop().runQualityGate(conv, blocks);
+            const stat = await qualityLoop().runQualityGate(conv, blocks);
+            qualityFindingsToMemory(stat.findings || []);
+            return stat;
         }
 
         /**
@@ -9041,16 +9163,47 @@
                 const STARTER = {
                     shop: '做一个迷你商城：商品目录、购物车、下单事务，条件原子扣库存防超卖，金额用整数分，订单有状态机且用户只能看自己的订单。',
                     admin: '做一个后台管理系统：成员与角色管理、分页列表、删除前校验权限，操作留审计日志。',
-                    collab: '做一个团队协作看板：任务状态机、指派归属，成员只能修改自己创建或指派给自己的任务。'
+                    collab: '做一个团队协作看板：任务状态机、指派归属，成员只能修改自己创建或指派给自己的任务。',
+                    saas: '做一个 SaaS 多租户系统：租户注册与隔离、成员邀请与角色、按 tenantId 过滤所有查询，并发下成员配额不得超限。'
                 };
                 tplGrid.addEventListener('click', (e) => {
                     const card = e.target.closest('.tpl');
                     if (!card) return;
                     const key = card.dataset.preset;
-                    if (els.reqGoal && STARTER[key]) els.reqGoal.value = STARTER[key];
-                    applyPreset(key);              // 填数据模型 / 授权 / 不变量 / 交付项
-                    setReqCollapsed(false);        // 展开需求面板，让用户看到填了什么
-                    if (els.messageInput) els.messageInput.focus();
+                    const workflow = state.config.mode === 'workflow';
+
+                    // 从空白开始（2026-10-27）：不套任何预设，聚焦到当前模式的真正需求入口。
+                    // workflow 模式下 messageInput 只是"补充说明"，聚焦它会误导用户；
+                    // smart 模式下才是底部输入框。提前 return，避免走查不存在的 custom 预设。
+                    if (key === 'custom') {
+                        if (workflow) {
+                            setReqCollapsed(false);        // 确保第 1 层表单展开
+                            if (els.reqGoal) els.reqGoal.focus();
+                        } else if (els.messageInput) {
+                            els.messageInput.focus();
+                        }
+                        return;
+                    }
+
+                    // 预设卡必须按模式分流（2026-10-27 修）。
+                    // 此前无论什么模式都只写进 reqGoal，而 smart（默认模式）下需求面板是
+                    // 隐藏的 —— 用户点完卡片屏幕上什么都不变，4 张卡等于死按钮。
+                    if (workflow) {
+                        if (els.reqGoal && STARTER[key]) els.reqGoal.value = STARTER[key];
+                        applyPreset(key);              // 填数据模型 / 授权 / 不变量 / 交付项
+                        setReqCollapsed(false);        // 展开需求面板，让用户看到填了什么
+                        if (els.messageInput) els.messageInput.focus();
+                        return;
+                    }
+                    // smart：模板描述直接进底部输入框（可直接发送或先改），
+                    // 结构化字段仍照常预填 —— 之后切到需求工作流时表单是现成的。
+                    if (STARTER[key] && els.messageInput) {
+                        els.messageInput.value = STARTER[key];
+                        updateSendBtnState();
+                        els.messageInput.focus();
+                    }
+                    applyPreset(key);
+                    showStatus('✨ 已填入需求描述，可直接发送，也可以先改两句', 'info');
                 });
             }
 
@@ -9674,6 +9827,8 @@
                 state: state.quality,
                 staticCheck: callStaticCheck,
                 review: callReviewApi,
+                // smart 质检偏差 → 记忆候选（P2 修复 2026-10-27）：测试与控制台都能直接驱动
+                findingsToMemory: qualityFindingsToMemory,
                 extract: extractCodeBlocks,
                 normalizeLang,
                 // autoContinue 里调用但长期无定义的统计合并（P0 补全）

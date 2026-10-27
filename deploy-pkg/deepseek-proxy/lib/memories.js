@@ -25,6 +25,13 @@ const STORE_FILE = path.join(DATA_DIR, 'memories.json');
 
 /** 分层召回上限：只带相关的，避免记忆堆爆 prompt 稀释注意力 */
 const RECALL_LIMITS = { L1: 5, L2: 3, L3: 4, L4: 2 };
+/**
+ * 反馈权重的半衰期（天，P4④ 2026-10-27）。
+ * 旧的反馈按 0.5^(天/30) 衰减：30 天前的违反只剩一半惩罚，90 天前只剩 1/8。
+ * 没有衰减时，半年前误判的两次 violated 会永久双倍压分，且没有自动恢复通道
+ * （只能人工 PATCH feedback 归零 —— 而用户根本不知道哪条被压着）。
+ */
+const FEEDBACK_HALF_LIFE_DAYS = 30;
 const VALID_TYPES = ['L1', 'L2', 'L3', 'L4'];
 const VALID_STATUS = ['active', 'pending', 'retired'];
 const VALID_SEVERITY = ['block', 'important', 'suggest'];
@@ -199,8 +206,14 @@ export function recallMemories(store, q = {}) {
 
         const sevW = m.severity === 'block' ? 3 : (m.severity === 'important' ? 2 : 1);
         const fb = m.feedback || { followed: 0, violated: 0 };
-        // 反馈权重：遵守加分、违反扣分（规则被照样违反 = 这条没用，双倍惩罚）
-        const fbW = (fb.followed || 0) * 0.5 - (fb.violated || 0) * 1;
+        // 反馈权重：遵守加分、违反扣分（规则被照样违反 = 这条没用，双倍惩罚）。
+        // 时间衰减（P4④）：按 updatedAt 给 30 天半衰期 —— 旧的违反逐渐淡出，
+        // 最近的违反全额惩罚。遵守加分同样衰减（陈旧的功劳不如最近的靠谱）。
+        // 用 updatedAt 而不是逐条记时间戳：零 schema 变更；反馈 / 确认 / 任何局部
+        // 更新都会刷新它，"最近被互动过"的规则拿最新的权重，这正是想要的语义。
+        const ageDays = Math.max(0, (Date.now() - (m.updatedAt || m.createdAt || Date.now())) / 86400000);
+        const decay = Math.pow(0.5, ageDays / FEEDBACK_HALF_LIFE_DAYS);
+        const fbW = ((fb.followed || 0) * 0.5 - (fb.violated || 0) * 1) * decay;
         const score = tagHits * 3 + wordHits * 2 + sevW + Math.min(m.hitCount || 0, 10) * 0.1 + fbW;
         scored.push({ m, score });
     }

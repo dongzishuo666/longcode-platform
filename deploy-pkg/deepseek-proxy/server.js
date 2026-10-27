@@ -672,11 +672,14 @@ app.post('/api/memories/recall', async (req, reply) => {
     req.log.warn({ code: body.code, message: body.message }, 'memories recall validate failed');
     return reply.code(httpStatusOf(body.code)).send(body);
   }
+  // 耗时观测（P4① 2026-10-27）：此前 ms 写的是 Date.now() 时间戳而非耗时，
+  // 日志里的"recall 耗时"完全失真（其他端点都是 Date.now() - startedAt）。
+  const startedAt = Date.now();
   try {
     const store = loadMemories();
     const r = recallMemories(store, parsed);
     req.log.info(
-      { counts: r.counts, stack: parsed.stack || '', ms: Date.now() },
+      { counts: r.counts, stack: parsed.stack || '', ms: Date.now() - startedAt },
       'memories recall done'
     );
     return reply.send({
@@ -684,7 +687,7 @@ app.post('/api/memories/recall', async (req, reply) => {
       items: r.items,
       counts: r.counts,
       prompt: formatMemoriesForPrompt(r),
-      ms: Date.now(),
+      ms: Date.now() - startedAt,
     });
   } catch (err) {
     // 记忆库坏不影响主流程：返回空召回，让调用方照常生成

@@ -163,6 +163,70 @@ export function issueToMemoryCandidate(issue) {
     };
 }
 
+// ==================== smart 质检偏差 → 记忆候选（P2 修复 2026-10-27） ====================
+// 背景：workflow 的偏差回流早就有（一致性校验 → autoCandidateMemories → 待确认），
+// 但 smart 的质检（审查 issue / 安全扫描）发现的问题从不沉淀 —— 踩过的坑下次照踩。
+// 这里是两类质检发现的适配器；聚合上限与入库由 index.html 的 qualityFindingsToMemory 做。
+
+/**
+ * 小模型审查的 issue → 记忆候选。
+ * 分层沿用 issueToMemoryCandidate 的规则：high→L1 / medium→L3 / 其余不入库；
+ * 另外多一条：标了 uncertain 的不沉淀 —— 审查自己都不信的判断，入库只会污染召回。
+ *
+ * sceneTags 用「review:<类型>」而非留空：后端 findDuplicate 靠标签重合做去重，
+ * 留空（一致性候选有 issueType 自动打标，审查类型不在 ISSUE_TAG_MAP 里）等于不去重，
+ * 每轮生成都会把同一条 issue 重复入库。
+ *
+ * @param {object} issue 审查 issue（issue_type/severity/description/uncertain）
+ * @param {string} [blockName] 所在代码块名（写进 trigger/badCase，方便人工确认时定位）
+ */
+export function reviewIssueToMemoryCandidate(issue, blockName) {
+    if (!issue) return null;
+    if (issue.uncertain) return null;
+    const sev = String(issue.severity || '').toLowerCase();
+    if (sev !== 'high' && sev !== 'medium') return null;
+    const type = String(issue.issue_type || issue.type || 'review').slice(0, 40);
+    const desc = String(issue.description || issue.message || '').trim().slice(0, 400);
+    if (!desc) return null;
+    return {
+        type: sev === 'high' ? 'L1' : 'L3',
+        rule: `生成代码时避免：${desc}`,
+        sceneTags: ['review:' + type],
+        trigger: `小模型审查在${blockName || '代码块'}发现 ${type} 问题时`,
+        badCase: desc,
+        source: `review:${type}:${blockName || ''}`,
+        severity: sev === 'high' ? 'block' : 'important',
+        status: 'pending'
+    };
+}
+
+/**
+ * 静态安全扫描的发现 → 记忆候选（smart 不注入安全基线 prompt，这类发现必然复发）。
+ * 一律 L1：安全类误报的代价是人工淘汰一条候选，漏报的代价是每轮都生成带洞的代码。
+ * low 级（blank_target 之类的提示性规则）不沉淀 —— 那是提示栏的事，不是约束的事。
+ *
+ * @param {object} item checkSecurity 的项（rule/severity/message/suggestion/snippet）
+ * @param {string} [blockName]
+ */
+export function securityFindingToMemoryCandidate(item, blockName) {
+    if (!item) return null;
+    const sev = String(item.severity || '').toLowerCase();
+    if (sev === 'low') return null;
+    const msg = String(item.message || '').trim().slice(0, 200);
+    if (!msg) return null;
+    const sugg = String(item.suggestion || '').trim().slice(0, 200);
+    return {
+        type: 'L1',
+        rule: sugg ? `${msg}（${sugg}）` : msg,
+        sceneTags: ['安全'],
+        trigger: `安全扫描在${blockName || '代码块'}命中 ${item.rule || 'risk'} 时`,
+        badCase: String(item.snippet || msg).slice(0, 300),
+        source: `security:${item.rule || 'risk'}:${blockName || ''}`,
+        severity: 'block',
+        status: 'pending'
+    };
+}
+
 
 /** 自动对齐轮数上限（token 成本最多翻倍） */
 export const DUAL_MAX_REPAIR_ROUND = 2;

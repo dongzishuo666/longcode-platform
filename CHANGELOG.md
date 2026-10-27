@@ -69,3 +69,19 @@
 ### 改动范围
 - 前端：`deploy-pkg/web/index.html`（+温和追问气泡 / 闸门主循环外移）、新增 `quality-gate.mjs` / `quality-orchestrator.mjs` / `quality-state.mjs`。
 - **后端 `deepseek-proxy` 零改动**。
+
+## 2026-10-27 · 记忆库增强 + 空白态/模板 UI 修复
+
+### 修复（记忆库，含后端）
+- **smart 模式补齐记忆注入（P1）**：此前智能生成模式不注入记忆，「管理不可见」等于「受益为零」；现已接入，小白档位同样受益。
+- **质检偏差回流成记忆候选（P2）**：质量闸门检出的偏差（压缩输出、符号冲突等）开始沉淀为记忆候选——踩过的坑下次生成前就能被召回。
+- **recall 耗时观测修正（P4①）**：`/api/memories/recall` 日志里的 `ms` 原来记的是 `Date.now()` 时间戳而非耗时，日志完全失真；改为 `Date.now() - startedAt`（与其它端点对齐）。
+- **反馈权重 30 天半衰期（P4④）**：此前半年前误判的两次「违反」会永久双倍压分且无自动恢复通道；现在遵守/违反权重按 `0.5^(天数/30)` 衰减（30 天剩一半、90 天剩 1/8），用 `updatedAt` 实现零 schema 变更——最近被互动的规则拿最新权重。
+
+### 修复（UI）
+- **空白态补齐 saas 孤儿卡 + 「从空白开始」出口（P4）**：小白档欢迎层关闭后若没有会话，空白态缺 saas 类模板卡与「从空白开始」入口。
+- **模板卡死按钮**：默认（智能生成）模式下模板卡点击无任何反应——现已在默认模式下正确路由到结构化需求预填。
+
+### 改动范围
+- 后端：`deploy-pkg/deepseek-proxy/lib/memories.js`（反馈半衰期）、`deploy-pkg/deepseek-proxy/server.js`（recall 耗时观测）。
+- 前端：`deploy-pkg/web/index.html`、`quality-text.mjs`、`quality-gate.mjs`、`dual-text.mjs`、`i18n.mjs`。

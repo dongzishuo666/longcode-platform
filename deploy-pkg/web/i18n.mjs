@@ -66,6 +66,16 @@ export const ZH2EN = {
     '类型与技术栈只是建议，模型可以按需求自行调整': 'Type and stack are only suggestions — the model may adapt them to your needs',
     '更多': 'More',
     '用大白话说说你想要什么，Ctrl+Enter 发送': 'Describe what you want in plain words, Ctrl+Enter to send',
+    // ===== 空白态模板卡（2026-10-27：补 saas 孤儿卡 + 从空白开始） =====
+    // 注：'SaaS 多租户' 在下方记忆库区已有词条（reqPresets 按钮用），不再重复
+    '租户隔离、成员邀请与角色、按租户过滤所有查询':
+        'Tenant isolation, member invites & roles, every query filtered by tenant',
+    '多租户': 'Multi-tenant',
+    '隔离': 'Isolation',
+    '配额': 'Quota',
+    '从空白开始': 'Start from scratch',
+    '不套预设，自由描述你想要什么': 'No preset — describe what you want freely',
+    '自定义': 'Custom',
     '预览修复': 'Preview fixes',
     '👁 预览': '👁 Preview',
     '🔧 修复': '🔧 Fixes',

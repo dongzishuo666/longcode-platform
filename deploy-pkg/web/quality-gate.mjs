@@ -58,6 +58,12 @@ export function createQualityGateLoop(deps) {
      */
     async function runQualityGate(conv, blocks) {
         const stat = { checked: 0, fixed: 0, blocked: 0, issues: 0, security: 0 };
+        // 本轮质检的原始发现（P2 修复 2026-10-27）：{kind:'review'|'security', issue/item, blockName}
+        // 回流成记忆候选由页面侧的 qualityFindingsToMemory 做（fire-and-forget），
+        // 这里只收集不过滤 —— 分层/uncertain/low 的取舍在适配器里，可独立单测。
+        // 注意：挂在 stat 上不会污染 mergeStat —— 它只累加数值字段，数组会被跳过。
+        const findings = [];
+        stat.findings = findings;
         if (!qs.isEnabled() || !blocks || !blocks.length) return stat;
 
         const lastMsg = conv.messages[conv.messages.length - 1];
@@ -131,6 +137,7 @@ export function createQualityGateLoop(deps) {
             //   isGenerating 永为真、状态栏永远停在「并行生成中」，表现为"卡住"。
             if (st && Array.isArray(st.security) && st.security.length) {
                 stat.security += st.security.length;
+                findings.push(...st.security.map(s => ({ kind: 'security', item: s, blockName: b.name })));
                 const top = st.security[0];
                 const more = st.security.length > 1 ? ` 等 ${st.security.length} 处` : '';
                 showStatus(
@@ -156,6 +163,8 @@ export function createQualityGateLoop(deps) {
                     }
                     const issues = Array.isArray(rev.issues) ? rev.issues : [];
                     stat.issues += issues.length;
+                    // 全量收集（含 uncertain / low）：是否值得沉淀由适配器判断
+                    findings.push(...issues.map(i => ({ kind: 'review', issue: i, blockName: b.name })));
                     // 自动修只针对 high；标了 uncertain 的不自动改，避免误伤
                     const high = issues.filter(i => i.severity === 'high' && !i.uncertain);
                     if (high.length) {
