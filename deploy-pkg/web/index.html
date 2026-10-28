@@ -18,9 +18,9 @@
         /* 构建戳（2026-10-24 第 4 步）：排查"改了但界面没变"时，
            在控制台看 build 就知道浏览器拿到的是哪一版，不用再靠猜缓存。 */
         (function(){
-          var BUILD = 'r10-2026-10-24';
+          var BUILD = 'r11-2026-10-27';
           document.documentElement.setAttribute('data-build', BUILD);
-          try { console.info('%c[build] ' + BUILD + ' · palette=purple-vivid', 'color:#B08CFF;font-weight:700'); } catch(e) {}
+          try { console.info('%c[build] ' + BUILD + ' · palette=green-terminal', 'color:#00d992;font-weight:700'); } catch(e) {}
         })();
         /* 语言也在首屏前定好：否则英文用户会先看到中文再闪成英文 */
         try{
@@ -90,7 +90,7 @@
         /* ========== 左侧会话列表 ========== */
         .sidebar {
             width: var(--sidebar-width);
-            background: var(--bg-secondary);
+            background: var(--bg-sidebar);
             border-right: 1px solid var(--border-color);
             display: flex;
             flex-direction: column;
@@ -333,7 +333,10 @@
             flex: 1;
             overflow-y: auto;
             padding: 24px 0;
-            background: var(--bg-primary);
+            /* transparent（2026-10-27）：原来刷 var(--bg-primary) 实色，
+               会把 body 的纵向渐变整块盖掉 —— 渐变是从上到下变亮的，
+               中间这一大块最需要透出来。 */
+            background: transparent;
         }
 
         .chat-inner {
@@ -555,13 +558,15 @@
             text-align: center;
             padding: 8px;
             font-size: 13px;
-            color: var(--text-muted);
-            background: var(--bg-secondary);
+            /* 提示条（含"已切换到编程小白模式"）：翡翠淡化底 + 次级文字 */
+            color: var(--text-secondary);
+            background: rgba(0,217,146,.08);
             border-top: 1px solid var(--border-color);
         }
 
         .status-tip.warning {
             color: var(--warning-color);
+            background: rgba(255,180,84,.10);
         }
 
         /* ---------- 需求工作流：方案评审面板 ---------- */
@@ -657,7 +662,7 @@
         }
 
         .plan-btn.primary {
-            color: #fff;
+            color: var(--on-accent);
             background: var(--accent-color);
             border-color: var(--accent-color);
         }
@@ -674,6 +679,10 @@
             border-radius: 10px;
         }
 
+        .status-tip.error {
+            color: var(--error-color);
+            background: rgba(255,93,91,.10);
+        }
         .status-tip.success {
             color: var(--success-color);
         }
@@ -764,6 +773,13 @@
         .input-inner {
             max-width: 900px;
             margin: 0 auto;
+        }
+        /* 小白空白态（2026-10-28）：输入卡与工具行都收起了，input-inner 自带的
+           底/圆角会留一条 22px 的空卡 —— 这里抹平，只留底部工具条。 */
+        .input-area.bare-inner .input-inner {
+            background: transparent;
+            border-color: transparent;
+            box-shadow: none;
         }
 
         .input-toolbar {
@@ -1287,7 +1303,7 @@
 
         .send-btn {
             background: var(--accent-color);
-            color: white;
+            color: var(--on-accent);
             border: none;
             padding: 6px 16px;
             border-radius: 4px;
@@ -1507,7 +1523,7 @@
         .modal-btn.primary {
             background: var(--accent-color);
             border-color: var(--accent-color);
-            color: white;
+            color: var(--on-accent);
         }
 
         /* 加载动画 */
@@ -1575,53 +1591,60 @@
              按钮白字        on #6C5AF0（渐变深端）≈ 4.8:1 ✅
            ========================================================================== */
         :root {
-            /* 画布 / 面板 / 抬升层（2026-10-24 r10：更浅 + 更紫）
-               两条硬约束决定了配色怎么走：
-                 ① 底色越亮，紫色小字的对比度越低 —— 面板不能无限提亮，
-                    面板亮度上限约 #323852（此时紫色小字仍有 4.63:1）。
-                 ② "紫色更明显"不能只靠文字色（会牺牲对比度），
-                    靠【底色自带紫调】+【填充与光晕】更有效：
-                    面板蓝通道比红通道高 32，整页自然泛紫。
-               画布 #2A3040 / 面板 #323852 / 抬升 #3D4460。 */
-            --bg-primary: #2A3040;
-            --bg-secondary: #323852;
-            --bg-tertiary: #3D4460;
-            --bg-hover: #4B5372;
-            /* 输入框底色比面板再亮一格，否则在卡片里像"陷进去" */
-            --bg-input: #39405A;
-            --border-color: rgba(255,255,255,.16);
-            --border-strong: rgba(255,255,255,.28);
+            /* ===== 绿终端配色（2026-10-27 r11）=====
+               自上而下的纵向渐变由 body 的 background-image 画（见下方 body 规则），
+               这里只定义【顶部色 + 半透明面板 + 文字 + 品牌绿】。
+               两条硬约束：
+                 ① --bg-primary 必须是 6 位 hex：test_css_health 会断言
+                    html/body 的兜底色与它相等、浏览器计算出的 background-color 也等于它。
+                    渐变只能走 background-image 层，不能塞进这个令牌。
+                 ② 面板必须用 rgba —— 任何实色面板都会把纵向渐变整块盖住，
+                    渐变就白做了（这是本次改色最容易返工的点）。
+               对比度实测（WCAG AA 小字 4.5:1）：
+                  text-primary   #e8fff4 on #032014 14.6 / on #073422 13.2 ✅
+                  text-secondary #9cc7b0 on 底部面板 6.7 / 抬升 7.5 ✅
+                  text-muted     #7aa891 on 底部面板 4.9 / 抬升 5.2 ✅（原 #5f8a74 只有 3.2，未达 AA）
+                  accent         #00d992 on 底部面板 6.8 ✅
+                  按钮深字       #082e1c on #00d992  8.0 ✅（翡翠底绝不能配白字：仅 1.6:1）
+               画布顶 #032014 → 底 #073422（低饱和墨绿：够绿但不抢按钮）。 */
+            --bg-primary: #032014;
+            /* 面板层：半透明，让渐变透出来（刻意不用实色） */
+            --bg-secondary: rgba(255,255,255,.035);
+            --bg-tertiary: rgba(255,255,255,.055);
+            --bg-hover: rgba(0,217,146,.12);
+            /* 输入框比面板再亮一点，否则在卡片里像"陷进去" */
+            --bg-input: rgba(255,255,255,.045);
+            /* 侧栏：比主区更深一档（叠在全页渐变上，读起来像"下一层"） */
+            --bg-sidebar: rgba(0,18,11,.45);
+            --border-color: rgba(0,217,146,.12);
+            --border-strong: rgba(0,217,146,.22);
             color-scheme: dark;
 
-            /* 文字 */
-            --text-primary: #F5F7FC;
-            --text-secondary: #CBD2E0;
-            --text-muted: #ADB6C6;
+            /* 文字（深绿底上浅绿字；翡翠只做按钮与状态，不做大段正文） */
+            --text-primary: #e8fff4;
+            --text-secondary: #9cc7b0;
+            --text-muted: #7aa891;
 
-            /* 品牌：这次要"紫色更明显"，就往饱和的紫罗兰走一档。
-               #AE93FF 在面板上 4.95:1、在画布上 5.63:1（都 ≥4.5，可作小字），
-               饱和度比上一版更高，紫味更足。 */
-            --accent-color: #AE93FF;
-            --accent-hover: #C7B5FF;
-            --accent-soft: rgba(174,147,255,.32);
-            --focus-ring: rgba(174,147,255,.75);
+            /* 品牌：翡翠 */
+            --accent-color: #00d992;
+            --accent-hover: #7cf7c4;
+            --accent-soft: rgba(0,217,146,.16);
+            --focus-ring: rgba(0,217,146,.55);
 
             /* 语义色 */
-            --success-color: #3DDC97;
-            --warning-color: #FFC857;
-            --error-color: #FF808C;   /* 画布变浅后原 #FF6B7A 只有 4.2:1 */
-            --info-color: #8CC0FF;
-            /* 语义色柔和底 / 描边：组件里原本硬编码 rgba(...)，
-               浅色主题下那些值又弱又偏色，这里统一成令牌 */
-            --success-soft: rgba(61,220,151,.12);
-            --warning-soft: rgba(255,200,87,.12);
-            --error-soft: rgba(255,107,122,.12);
-            --error-line: rgba(255,107,122,.35);
-            --accent-line: rgba(174,147,255,.52);
+            --success-color: #00d992;
+            --warning-color: #ffb454;
+            --error-color: #ff5d5b;
+            --info-color: #818cf8;   /* 信息 / 代码高亮：留一点冷色，避免整屏发绿糊成一片 */
+            --success-soft: rgba(0,217,146,.12);
+            --warning-soft: rgba(255,180,84,.12);
+            --error-soft: rgba(255,93,91,.12);
+            --error-line: rgba(255,93,91,.35);
+            --accent-line: rgba(0,217,146,.45);
 
-            --code-bg: #1E2334;          /* 代码块仍比画布深：白字在深底上更清楚 */
-            --user-msg-bg: linear-gradient(135deg,#6D28D9,#8B5CF6);
-            --ai-msg-bg: #323852;
+            --code-bg: #051d14;          /* 代码块比面板深：白字在深底上更清楚 */
+            --user-msg-bg: linear-gradient(135deg,#0b5c3f,#0f7a52);
+            --ai-msg-bg: rgba(255,255,255,.04);
 
             --radius-sm: 8px; --radius-md: 12px; --radius-lg: 16px; --radius-pill: 999px;
             --shadow-sm: 0 1px 2px rgba(0,0,0,.35);
@@ -1629,21 +1652,17 @@
             --shadow-lg: 0 18px 50px rgba(0,0,0,.45);
             --ease: cubic-bezier(.4,0,.2,1);
             --dur: .22s;
-            /* 白字填充只能"深紫"：实测白字在 #8B5CF6 上仅 4.23:1（不达标），
-               凡亮于 #7C3AED 的紫都不能铺白字。
-               所以"亮紫"的观感交给三处（都不影响白字）：
-                 · --accent-color #AE93FF：描边 / 悬停 / 图标 / 小字
-                 · --accent-soft  .30：选中态与徽标底色
-                 · --bg-glow      双径向光晕
-               填充层保持深紫以保证白字 ≥5.7:1。
-               按钮的"立体感"不靠把渐变调亮（那会毁掉白字），
-               而是靠 inset 高光 + 外发光 + 底部硬阴影（见 .send-btn）。 */
-            --gradient-accent: linear-gradient(135deg,#6D28D9,#7C3AED);
-            --gradient-user: linear-gradient(135deg,#5B21B6,#6D28D9);
-            /* 光晕加深：这是"紫色氛围"最省事也最明显的来源 */
+            /* 填充层：翡翠底 + 深字（#082e1c on #00d992 ≈ 8:1）。
+               ⚠ 翡翠底绝不能配白字 —— 白字在 #00d992 上只有 1.6:1。
+               凡是 background 用 --gradient-accent 的按钮，color 必须同步用
+               --on-accent（见下），改一处漏一处就会出"看不清字"的按钮。 */
+            --gradient-accent: linear-gradient(135deg,#00b87a,#00d992);
+            --gradient-user: linear-gradient(135deg,#0b5c3f,#0f7a52);
+            --on-accent: #082e1c;
+            /* 光晕：绿色氛围（原来双紫径向），配合纵向渐变做"屏幕发光"感 */
             --bg-glow:
-                radial-gradient(1000px 460px at 84% -12%, rgba(174,147,255,.30), transparent 60%),
-                radial-gradient(760px 420px at 6% 106%, rgba(139,92,246,.22), transparent 62%);
+                radial-gradient(1000px 460px at 84% -12%, rgba(0,217,146,.20), transparent 62%),
+                radial-gradient(760px 420px at 6% 106%, rgba(0,184,122,.14), transparent 64%);
         }
         /* 浅色主题已移除（2026-10-24 用户决定：只用紫色深色一套）。
            删掉整块 :root[data-theme="light"] 的意义不只是少一套配色 —— 之前出现过
@@ -1654,14 +1673,36 @@
            ⚠ 2026-10-24 教训：兜底值必须与 --bg-primary 同步 —— 一旦不同步，
            "改令牌但页面没变"会变成极难察觉的假象（用户看到的其实是兜底色）。
            test_css_health.mjs 会断言这两者相等。 */
-        html { background-color: var(--bg-primary, #2A3040); }
+        html { background-color: var(--bg-primary, #032014); }
 
+        /* 全局纵向渐变（2026-10-27 r11「绿终端」）：顶部近黑墨绿 → 底部微亮。
+           ⚠ 渐变必须放在 background-image 层：--bg-primary 保持 6 位 hex，
+             test_css_health 会断言 html/body 兜底色与浏览器计算出的
+             background-color 都等于它（改了颜色但"看起来没变"的历史事故就是
+             靠这条守住的）。多层背景的最后一层是颜色，所以写法是「光晕, 渐变, 实色」。
+           面板若用实色，会把渐变整块盖住 —— 所以所有面板 token 都是 rgba。 */
         body {
-            background: var(--bg-glow), var(--bg-primary, #2A3040);
-            color: var(--text-primary, #F5F7FC);
+            background:
+                var(--bg-glow),
+                linear-gradient(180deg,
+                    #032014 0%,
+                    #062b1b 50%,
+                    #073422 100%),
+                var(--bg-primary, #032014);
+            background-attachment: fixed;
+            color: var(--text-primary, #e8fff4);
             transition: background-color var(--dur) var(--ease);
         }
 
+        /* 终端扫描线（用户方案 §4，很克制）：只做观感。
+           必须 pointer-events:none（不能挡点击），z-index 2 远低于欢迎层/弹窗的 1300。 */
+        body::after {
+            content: ""; position: fixed; inset: 0; z-index: 2; pointer-events: none;
+            background: repeating-linear-gradient(0deg,
+                rgba(255,255,255,.55) 0px, rgba(255,255,255,.55) 1px,
+                transparent 1px, transparent 3px);
+            opacity: .02;
+        }
         /* 键盘可达性（2026-10-24）：全站此前只有输入类元素有 :focus 样式，
            模板卡 / 工具按钮 / 侧栏项用 Tab 走一遍看不见焦点。
            :focus-visible 只在键盘操作时出现，不影响鼠标点击的观感。 */
@@ -1690,7 +1731,7 @@
         /* 侧栏 */
         .sidebar-header { gap: 10px; padding: 14px; }
         .new-conv-btn {
-            background: var(--gradient-accent); color: #fff; border: none; border-radius: var(--radius-md);
+            background: var(--gradient-accent); color: var(--on-accent); border: none; border-radius: var(--radius-md);
             font-weight: 600; box-shadow: var(--shadow-sm);
             transition: filter var(--dur) var(--ease), transform var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
         }
@@ -1716,7 +1757,7 @@
         .message { align-items: flex-start; }
         .msg-avatar { border-radius: 10px; box-shadow: var(--shadow-sm); }
         .message.user .msg-avatar { background: var(--gradient-user); color: #fff; border: none; }
-        .message.ai .msg-avatar { background: var(--gradient-accent); color: #fff; border: none; }
+        .message.ai .msg-avatar { background: var(--gradient-accent); color: var(--on-accent); border: none; }
         .message.user .msg-content {
             background: var(--gradient-user); color: #fff; border-radius: var(--radius-lg);
             padding: 12px 16px; box-shadow: var(--shadow-sm);
@@ -1752,30 +1793,30 @@
         .input-wrapper:focus-within { border-color: transparent; }
         #messageInput { padding: 8px 4px; }
         .send-btn {
-            background: var(--gradient-accent); color: #fff; border: none; border-radius: var(--radius-pill);
+            background: var(--gradient-accent); color: var(--on-accent); border: none; border-radius: var(--radius-pill);
             padding: 8px 20px; font-weight: 600; box-shadow: var(--shadow-sm);
             transition: filter var(--dur) var(--ease), transform var(--dur) var(--ease), box-shadow var(--dur) var(--ease);
         }
         .send-btn:hover:not(:disabled) { transform: translateY(-1px); box-shadow: var(--shadow-md); filter: brightness(1.06); }
-        /* 深紫填充 + 亮紫外描边：既有"亮紫"的观感，又不牺牲白字对比度。
+        /* 翡翠填充（深字）+ 翡翠外描边：立体感三层叠加（2026-10-24 r9 起，2026-10-27 换绿）。
            立体感三层叠加（2026-10-24 r9）：
              ① inset 顶部高光 —— 模拟光源从上来，按钮像凸起
-             ② 外发光紫晕   —— 把按钮从背景里"托"出来
+             ② 外发光绿晕   —— 把按钮从背景里"托"出来
              ③ 底部硬阴影   —— 制造厚度
-           渐变本身保持深紫，因为白字在亮紫上不达标。 */
+           ⚠ 深字（--on-accent）不是审美选择：白字在 #00d992 上只有 1.6:1。 */
         .send-btn, .new-conv-btn {
             box-shadow:
                 inset 0 1px 0 rgba(255,255,255,.22),
                 0 0 0 1px var(--accent-line),
                 0 6px 10px rgba(8,6,20,.45),
-                0 12px 28px rgba(124,58,237,.42);
+                0 12px 28px rgba(0,217,146,.32);
         }
         .send-btn:hover:not(:disabled), .new-conv-btn:hover {
             box-shadow:
                 inset 0 1px 0 rgba(255,255,255,.28),
                 0 0 0 1px var(--accent-color),
                 0 8px 14px rgba(8,6,20,.5),
-                0 18px 38px rgba(124,58,237,.55);
+                0 18px 38px rgba(0,217,146,.45);
         }
         .stop-btn { border-radius: var(--radius-pill); transition: all var(--dur) var(--ease); }
 
@@ -1817,7 +1858,7 @@
 
         /* 侧栏品牌 */
         .sidebar-brand { display: flex; align-items: center; gap: 10px; padding: 16px 16px 12px; }
-        .brand-mark { width: 30px; height: 30px; border-radius: 9px; background: var(--gradient-accent); color: #fff; display: flex; align-items: center; justify-content: center; font-size: 16px; box-shadow: var(--shadow-sm); }
+        .brand-mark { width: 30px; height: 30px; border-radius: 9px; background: var(--gradient-accent); color: var(--on-accent); display: flex; align-items: center; justify-content: center; font-size: 16px; box-shadow: var(--shadow-sm); }
         .brand-name { font-size: 14px; font-weight: 700; color: var(--text-primary); letter-spacing: .3px; }
 
         /* 数据中心 */
@@ -1918,7 +1959,7 @@
         /* 工具条按钮上的待确认角标 */
         .tool-dock .mem-count {
             display: inline-block; min-width: 16px; height: 16px; line-height: 16px;
-            border-radius: 8px; background: var(--error-color); color: #fff;
+            border-radius: 8px; background: var(--error-color); color: #2a0402;
             font-size: 10px; font-weight: 700; text-align: center; padding: 0 4px; margin-left: 4px;
         }
 
@@ -2008,7 +2049,7 @@
         .tw-desc { font-size: 12.5px; color: var(--text-muted); line-height: 1.6; min-height: 2.8em; }
         .tw-go {
             margin-top: 6px; padding: 8px 26px; border: none; border-radius: var(--radius-sm);
-            background: var(--gradient-accent); color: #fff;
+            background: var(--gradient-accent); color: var(--on-accent);
             font-weight: 700; font-size: 13px;
         }
         @media (max-width: 720px) { .tw-cards { grid-template-columns: 1fr; } }
@@ -2024,14 +2065,23 @@
         .nw-types { display: flex; flex-wrap: wrap; gap: 8px; }
         .nw-type {
             padding: 7px 14px; border-radius: var(--radius-pill); cursor: pointer;
-            background: var(--bg-tertiary); border: 1px solid var(--border-color);
-            color: var(--text-muted); font-size: 13px; font-family: inherit;
+            /* 未选中（按用户方案）：透明底 + 极淡翡翠描边 + 次级文字 */
+            background: transparent; border: 1px solid rgba(0,217,146,.16);
+            color: var(--text-secondary); font-size: 13px; font-family: inherit;
             transition: border-color var(--dur) var(--ease), color var(--dur) var(--ease), background var(--dur) var(--ease);
         }
         .nw-type:hover { color: var(--text-secondary); }
         .nw-type.active {
-            border-color: var(--accent-color); color: var(--text-primary);
-            background: var(--accent-soft);
+            /* 选中：翡翠底 + 深字（白字在 #00d992 上只有 1.6:1，必须用 --on-accent） */
+            border-color: var(--accent-color); background: var(--accent-color);
+            color: var(--on-accent); font-weight: 700;
+        }
+        /* 「其它」用淡紫点缀，打破全绿单调（文字取 #9aa4fa：淡紫 #818cf8 只有 4.19:1，
+
+           当边框没问题、当文字不达标）；选中态仍回到翡翠，保持"选中=翡翠"的唯一语义 */
+        .nw-type[data-type="other"] { border-color: rgba(129,140,248,.55); color: #9aa4fa; }
+        .nw-type[data-type="other"].active {
+            border-color: var(--accent-color); background: var(--accent-color); color: var(--on-accent);
         }
         .nw-input {
             width: 100%; box-sizing: border-box; resize: vertical;
@@ -2066,8 +2116,12 @@
         .nw-foot { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
         .nw-go {
             padding: 10px 24px; border: none; border-radius: var(--radius-sm); cursor: pointer;
-            background: var(--gradient-accent); color: #fff;
+            background: var(--gradient-accent); color: var(--on-accent);
             font-weight: 700; font-size: 14px; font-family: inherit;
+        }
+        /* hover：微弱绿光，模拟终端运行灯（用户方案 §3.1） */
+        .nw-go:hover:not(:disabled), .send-btn:hover:not(:disabled), .new-conv-btn:hover {
+            box-shadow: 0 0 14px rgba(0,217,146,.25);
         }
         .nw-go:disabled { opacity: .45; cursor: not-allowed; }
         .nw-adv {
@@ -2079,10 +2133,20 @@
 
         /* ---------- 空白态（2026-10-24 第 2 步重做） ---------- */
         .empty-state {
-            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            display: flex; flex-direction: column; align-items: center;
+            /* 不用 justify-content:center（2026-10-27）：内容比容器高时，flex 居中会把
+               【顶部】挤出可视区且滚不到 —— 加了第 5 张模板卡后大标题就被顶栏压掉一半。
+               改用首尾 auto margin：有富余空间时照样居中，空间不够时两个 auto 归零，
+               顶部不会被裁。 */
+            justify-content: flex-start;
             text-align: center; gap: 26px; padding: 44px 24px 30px;
             color: var(--text-muted); min-height: 56vh; overflow-y: auto;
         }
+        .empty-state > .hero { margin-top: auto; }
+        /* 尾部的 auto margin 挂在"当前档位下最后可见的那个子元素"上：
+           程序员档是模板卡网格，小白档（模板卡隐藏）是向导 */
+        .empty-state > .tpl-grid { margin-bottom: auto; }
+        .empty-state > .novice-wizard { margin-bottom: auto; }
         .hero { animation: heroRise .45s var(--ease) both; }
         @keyframes heroRise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
         .hero-title {
@@ -2091,7 +2155,7 @@
         }
         .hero-title em {
             font-style: normal;
-            background: linear-gradient(120deg, #C7B5FF, #AE93FF 55%, #8B5CF6);
+            background: linear-gradient(120deg, #7cf7c4, #00d992 55%, #00b87a);
             -webkit-background-clip: text; background-clip: text; color: transparent;
         }
         .hero-sub { margin: 10px auto 0; max-width: 520px; font-size: 13.5px; line-height: 1.7; color: var(--text-secondary); }
@@ -2099,7 +2163,8 @@
         .chip {
             display: inline-flex; align-items: center; gap: 6px;
             padding: 5px 12px; border-radius: var(--radius-pill);
-            background: var(--bg-tertiary); border: 1px solid var(--border-color);
+            /* 低调：翡翠淡化底 + 次级文字，圆点保持翡翠（视觉锚点） */
+            background: rgba(0,217,146,.06); border: 1px solid rgba(0,217,146,.12);
             font-size: 12px; color: var(--text-secondary);
         }
         .chip i { width: 6px; height: 6px; border-radius: 50%; background: var(--accent-color); flex: none; }
@@ -2443,9 +2508,9 @@
             </div>
 
             <!-- 底部输入区 -->
-            <div class="input-area">
+            <div class="input-area" id="inputArea">
                 <div class="input-inner">
-                    <div class="input-toolbar">
+                    <div class="input-toolbar" id="inputToolbar">
                         <label class="tool-btn">
                             🖼️ 图片
                             <input type="file" id="imageInput" accept="image/*" multiple>
@@ -2689,7 +2754,7 @@
                         </div>
                     </div>
 
-                    <div class="input-wrapper">
+                    <div class="input-wrapper" id="inputWrapper">
                         <div class="image-preview" id="imagePreview" style="display: none;"></div>
                         <textarea id="messageInput" placeholder="输入消息，Ctrl+Enter 发送"></textarea>
                         <div class="input-footer">
@@ -2944,6 +3009,21 @@
     <script type="module">
         import { createQualityGateLoop } from './quality-gate.mjs';
         window.createQualityGateLoop = createQualityGateLoop;
+    </script>
+    <!-- 项目挂载（R2 第一步 2026-10-28）：符号表/契约/需求的挂载编排同样只挂工厂。 -->
+    <script type="module">
+        import { createProjectMount } from './project-mount.mjs';
+        window.createProjectMount = createProjectMount;
+    </script>
+    <!-- prompt 组装（R2 第二步）：记忆注入顺序 + 系统提示词长度预算，只挂工厂。 -->
+    <script type="module">
+        import { createPromptAssembly } from './prompt-assembly.mjs';
+        window.createPromptAssembly = createPromptAssembly;
+    </script>
+    <!-- 存量配置迁移（R2 第三步）：mode/tier 归一、上下文窗口兜底、脏数据容错，只挂工厂。 -->
+    <script type="module">
+        import { createStateMigrate } from './state-migrate.mjs';
+        window.createStateMigrate = createStateMigrate;
     </script>
     <script>
         // ==================== 全局状态 ====================
@@ -3604,6 +3684,10 @@
                newConvBtn: document.getElementById('newConvBtn'),
                sidebarCollapseBtn: document.getElementById('sidebarCollapseBtn'),
                sidebarExpandBtn: document.getElementById('sidebarExpandBtn'),
+            emptyState: document.getElementById('emptyState'),
+            inputWrapper: document.getElementById('inputWrapper'),
+            inputToolbar: document.getElementById('inputToolbar'),
+            inputArea: document.getElementById('inputArea'),
             chatInner: document.getElementById('chatInner'),
             chatContainer: document.getElementById('chatContainer'),
             messageInput: document.getElementById('messageInput'),
@@ -3917,8 +4001,8 @@
          * 未知值也归 smart：宁可功能全开，也不要悄悄退化成裸聊天。
          */
         function normalizeMode(m) {
-            if (m === 'workflow') return 'workflow';
-            return 'smart';   // smart / normal / longcode / 空 / 未知 → smart
+            // 规则在 state-migrate.mjs（R2 第三步）：只认 workflow，其余一律 smart
+            return stateMigrate().normalizeMode(m);
         }
 
         // ==================== 档位（第 0 层，2026-10-26 双模式档位方案） ====================
@@ -3931,7 +4015,8 @@
         /** 档位归一化：只认 novice，其余（空 / 未知 / 存量缺字段）一律 pro。
          *  存量用户因此默认程序员档且不弹欢迎层（已确认决策 1）。 */
         function normalizeTier(t) {
-            return t === 'novice' ? 'novice' : 'pro';
+            // 规则在 state-migrate.mjs（R2 第三步）：只认 novice，其余一律 pro
+            return stateMigrate().normalizeTier(t);
         }
 
         /** 小白「高级模式 / 更多」的临时展开态。
@@ -3978,6 +4063,21 @@
         }
 
         /** 档位显隐的总闸：切档位 / init / 展开态变化都走这里。 */
+        /** 小白空白态：向导就是输入区，底部输入卡不该再露一个「发送」。
+         *  判据用【会话有没有消息】而不是 emptyState 的内联样式 ——
+         *  后者由 MutationObserver 异步更新，发送后第一时间还读不到（会留一帧双按钮）。
+         *  有消息后向导消失、输入卡回来，续聊照常。 */
+        function syncComposerVisibility() {
+            if (!els.inputWrapper) return;
+            const wizardMode = state.config.tier === 'novice' && state.config.mode === 'smart';
+            const conv = (state.conversations || []).find(c => c.id === state.currentConvId);
+            const emptyOn = !conv || !conv.messages || conv.messages.length === 0;
+            els.inputWrapper.style.display = (wizardMode && emptyOn) ? 'none' : '';
+            if (els.inputArea) els.inputArea.classList.toggle('bare-inner', wizardMode && emptyOn);
+            // 只服务于输入卡的工具行（图片/代码文件）一起收起 —— 向导发的是纯文本，
+            // 留着它既点不出效果，又会在底部悬一行孤零零的按钮
+            if (els.inputToolbar) els.inputToolbar.style.display = (wizardMode && emptyOn) ? 'none' : '';
+        }
         function applyTierGating() {
             const novice = noviceUI();
 
@@ -4023,6 +4123,7 @@
             syncProviderUI();
             // ⑥ 修复记录按钮：自带"有记录才显示"，档位/展开态变化时重算（内部叠 tierToolVisible）
             updateFixLogBtn();
+            syncComposerVisibility();
 
             // 向导里的「高级模式」按钮文案
             if (els.nwAdvBtn) {
@@ -4352,47 +4453,26 @@
                 if (convs) state.conversations = JSON.parse(convs);
                 if (curr) state.currentConvId = curr;
                 if (cfg) state.config = { ...state.config, ...JSON.parse(cfg) };
-                // 存量供应商迁移（2026-10-24）：老配置的 localStorage 里没有 provider 字段。
-                // 缺省 deepseek —— 老用户本来就只连 DeepSeek，且 providerBase 也为空
-                // （沿用后端部署者配的地址），升级前后行为完全一致，不会静默改端点。
-                state.config.provider = normalizeProvider(
-                    state.config.provider || DEFAULT_PROVIDER
-                );
-                // 存量模型迁移：V4-Pro 已淘汰、上游不再接受，但老用户 localStorage 里
-                // 可能还存着 deepseek-v4-pro。不迁移的话刷新一次页面就用一个死名字。
-                state.config.model = normalizeModel(state.config.model);
-                // 存量模式迁移（2026-10-24）：normal / longcode 都并入 smart。
-                // 不迁移的话，老用户 localStorage 里的 'normal' 会让下拉选不中任何项
-                // （options 已无该值），且模式判断全部失效。
-                state.config.mode = normalizeMode(state.config.mode);
-                // 档位归一化（2026-10-26）：存量配置没有 tier → 归一到 pro。
-                // 存量用户不弹欢迎层、默认程序员档（已确认决策 1）。
-                state.config.tier = normalizeTier(state.config.tier);
-                // 上下文窗口：老配置没有这个字段（或存了脏值）→ 按供应商预设补上。
-                // 不补的话 currentCtxTokens() 会走 FALLBACK，对 32K 窗口的供应商
-                // （Kimi / Ollama）等于长度保护失效，续写会一路撞到上游报错。
-                {
-                    const preset = getProvider(state.config.provider);
-                    const ctx = Number(state.config.contextTokens);
-                    if (!Number.isFinite(ctx) || ctx < 1000) {
-                        state.config.contextTokens = preset ? preset.ctx : FALLBACK_CTX_TOKENS;
-                    }
-                }
-                if (usage) {
-                    // 容错：历史上 state.usage 未初始化时存出过字符串 "undefined"，
-                    // JSON.parse 会炸；单独 try 住，别让它带崩整个 loadAll。
-                    try { state.usage = { ...state.usage, ...JSON.parse(usage) }; } catch { /* 脏数据，忽略 */ }
-                }
+                // 存量配置迁移与归一化（R2 第三步：规则在 state-migrate.mjs，这里只做注入）：
+                // 供应商缺省、淘汰模型改名、mode/tier 归一、上下文窗口兜底
+                state.config = stateMigrate().migrateConfig(state.config, {
+                    normalizeProvider,
+                    normalizeModel,
+                    defaultProvider: DEFAULT_PROVIDER,
+                    ctxOfProvider: getProvider,
+                    fallbackCtx: FALLBACK_CTX_TOKENS
+                });
+                // 用量状态容错合并（脏数据 "undefined" 不该带崩整个 loadAll）
+                state.usage = stateMigrate().mergeUsage(state.usage, usage);
 
                 // 无会话则新建
                 if (!state.conversations || state.conversations.length === 0) {
                     createConversation();
                 } else {
-                    // 校验当前会话ID是否存在
-                    const exists = state.conversations.find(c => c.id === state.currentConvId);
-                    if (!exists) {
-                        state.currentConvId = state.conversations[0].id;
-                    }
+                    // 校验当前会话ID是否存在（会话被删 / 脏数据 → 落到第一条）
+                    state.currentConvId = stateMigrate().pickCurrentConvId(
+                        state.conversations, state.currentConvId
+                    );
                     // 2026-10-25 第 1 步：刷新页面后把当前会话的项目资产灌回来。
                     // 不补这一步，资产虽然存下来了却不会回到运行态 —— 等于白存。
                     const cur = getCurrentConv();
@@ -4865,6 +4945,7 @@
             }
 
             scrollToBottom();
+            syncComposerVisibility();
             updateTokenInfo();
         }
 
@@ -5118,6 +5199,10 @@
 
         // 滚动到底部
         function scrollToBottom() {
+            // 空白态不滚（2026-10-27）：.empty-state 的内容比聊天区可视高度更高时
+            //（加了第 5 张模板卡之后就会超过），滚到底会把它自己的 hero 顶出可视区，
+            // 表现为"大标题被顶栏吃掉一半"。判据与空白态显隐同一口径：有没有 .message。
+            if (!els.chatInner || !els.chatInner.querySelector('.message')) return;
             requestAnimationFrame(() => {
                 els.chatContainer.scrollTop = els.chatContainer.scrollHeight;
             });
@@ -5708,90 +5793,62 @@
          * 体积上只多了几十 KB 摘要，远小于把代码全带上。
          */
 
-        /** 会话 → 项目包的缓存（同一会话内容没变就不重复提取） */
-        const packCache = new Map();
-
-        function packOf(conv) {
-            if (!conv) return null;
-            const stamp = (conv.updatedAt || 0) + '|' + (conv.messages ? conv.messages.length : 0);
-            const hit = packCache.get(conv.id);
-            if (hit && hit.stamp === stamp) return hit.pack;
-            const pack = window.QT.buildProjectPack(conv);
-            packCache.set(conv.id, { stamp, pack });
-            return pack;
+        // ---------- 项目挂载（R2 第一步 2026-10-28：实现已搬到 project-mount.mjs）----------
+        // 保留【函数声明】而不是 const 箭头函数：既有套件靠覆盖 win.showStatus 打桩，
+        // 声明会挂 window 且内部调用走全局绑定；const 只会造出页面读不到的影子属性。
+        let __pm = null;
+        function projectMount() {
+            if (__pm) return __pm;
+            const factory = window.createProjectMount;
+            if (!factory) throw new Error('project-mount.mjs 未加载（window.createProjectMount 缺失）');
+            __pm = factory({
+                getState: () => state,
+                QT: window.QT,
+                showStatus: (t, k) => showStatus(t, k),   // 调用时解析：测试会在 boot 后覆盖它
+                saveAll: () => saveAll(),
+                setStage: (s) => setStage(s),
+                closeMount: () => closeMount(),
+                mountBtn: () => els.mountBtn
+            });
+            return __pm;
         }
+        function packOf(conv) { return projectMount().packOf(conv); }
+        function updateMountBtn() { return projectMount().updateMountBtn(); }
+        function mergeSymbolMap(into, from) { return projectMount().mergeSymbolMap(into, from); }
+        function mountProject(convId) { return projectMount().mountProject(convId); }
 
-        function updateMountBtn() {
-            if (!els.mountBtn) return;
-            const p = state.quality.project;
-            els.mountBtn.classList.toggle('off', !p);
-            els.mountBtn.title = p
-                ? `已挂载项目：${p.title || '未命名'}（点开可查看/更换）`
-                : '把一个历史会话的项目资产（符号表/契约/改动记录）挂到当前会话';
+        // ---------- prompt 组装（R2 第二步 2026-10-28：实现搬到 prompt-assembly.mjs）----------
+        // 只搬"怎么拼、拼多长"；安全/工程/迁移基线连同大段常量仍留在本文件。
+        // 函数声明（不是 const）：套件靠覆盖 win.withMemories 之类打桩，const 会造影子属性。
+        let __pa = null;
+        function promptAssembly() {
+            if (__pa) return __pa;
+            const factory = window.createPromptAssembly;
+            if (!factory) throw new Error('prompt-assembly.mjs 未加载（window.createPromptAssembly 缺失）');
+            __pa = factory({
+                getMemories: () => state.memories,
+                getUserPrompt: () => state.config.systemPrompt,
+                maxSysLen: MAX_SYS_PROMPT_LEN,
+                memoryBudget: 2400   // L1 在最前，截断先保硬约束
+            });
+            return __pa;
         }
+        function fitSystemPrompt(base, extra, note) { return promptAssembly().fitSystemPrompt(base, extra, note); }
+        function trimMemories(text) { return promptAssembly().trimMemories(text); }
+        function withMemories(prompt) { return promptAssembly().withMemories(prompt); }
+        function smartSystemPrompt() { return promptAssembly().smartSystemPrompt(); }
+        function withProjectContext(messages, ctxText) { return promptAssembly().withProjectContext(messages, ctxText); }
 
-        /** 合并符号表：同文件按名字去重追加，不整体覆盖（避免丢掉当前会话已有的） */
-        function mergeSymbolMap(into, from) {
-            let added = 0;
-            for (const [file, entries] of Object.entries(from || {})) {
-                if (!Array.isArray(entries)) continue;
-                const cur = Array.isArray(into[file]) ? into[file] : (into[file] = []);
-                const seen = new Set(cur.map(e => e && e.name).filter(Boolean));
-                for (const e of entries) {
-                    const n = e && e.name;
-                    if (!n || seen.has(n)) continue;
-                    cur.push(e);
-                    seen.add(n);
-                    added++;
-                }
-            }
-            return added;
-        }
-
-        /**
-         * 把某个历史会话的项目挂载到当前会话。
-         * 已有内容不覆盖 —— 契约/需求是"当前会话的事实"，挂载只能补空缺。
-         */
-        function mountProject(convId) {
-            const conv = state.conversations.find(c => c.id === convId);
-            if (!conv) return { ok: false, reason: 'not-found' };
-            if (convId === state.currentConvId) {
-                showStatus('不能挂载当前会话自身', 'warning');
-                return { ok: false, reason: 'self' };
-            }
-            const pack = packOf(conv);
-            const sum = window.QT.packSummary(pack);
-            if (sum.empty) {
-                showStatus('该会话还没有可挂载的资产（没有代码块、契约或符号）', 'warning');
-                return { ok: false, reason: 'empty' };
-            }
-
-            const added = mergeSymbolMap(state.quality.symbols.byFile, pack.symbols.byFile);
-            for (const x of (pack.symbols.exports || [])) state.quality.symbols.exports.add(x);
-
-            const skipped = [];
-            if (pack.contract && !state.workflow.contract) {
-                state.workflow.contract = pack.contract;
-                state.workflow.contractText = pack.contractText || '';
-                if (state.workflow.stage === 'idle') setStage('contract');
-            } else if (pack.contract) skipped.push('契约');
-            if (pack.requirement && !state.workflow.requirement) state.workflow.requirement = pack.requirement;
-            else if (pack.requirement) skipped.push('需求');
-            if (pack.spec && !state.workflow.spec) state.workflow.spec = pack.spec;
-            else if (pack.spec) skipped.push('结构化需求');
-
-            state.quality.project = pack;
-            saveAll();
-            updateMountBtn();
-            closeMount();
-
-            showStatus(
-                `📦 已挂载「${pack.title || '未命名项目'}」：${sum.files} 个代码块 · ${sum.symbolFiles} 个符号文件 · ${sum.decisions} 条改动记录`
-                + (added ? `（新增 ${added} 个符号）` : '')
-                + (skipped.length ? `；当前会话已有 ${skipped.join('/')}，未覆盖` : ''),
-                'success'
-            );
-            return { ok: true, added, skipped, pack };
+        // ---------- 存量配置迁移（R2 第三步 2026-10-28：实现搬到 state-migrate.mjs）----------
+        // 只搬【归一化纯函数】；saveAll 仍在页面 —— 它要序列化整个 state，和页面强耦合。
+        // 供应商/模型的规则绑定 PROVIDERS 表，留在页面以函数形式注入。
+        let __sm = null;
+        function stateMigrate() {
+            if (__sm) return __sm;
+            const factory = window.createStateMigrate;
+            if (!factory) throw new Error('state-migrate.mjs 未加载（window.createStateMigrate 缺失）');
+            __sm = factory();
+            return __sm;
         }
 
         /**
@@ -5812,19 +5869,6 @@
             return window.QT.buildProjectContext(src, pack, userText || '');
         }
 
-        /** 把上下文追加到最后一条 user 消息（返回新数组，不改 conv） */
-        function withProjectContext(messages, ctxText) {
-            if (!ctxText) return messages;
-            const out = messages.slice();
-            for (let i = out.length - 1; i >= 0; i--) {
-                if (out[i] && out[i].role === 'user') {
-                    out[i] = { role: 'user', content: out[i].content + '\n\n' + ctxText };
-                    return out;
-                }
-            }
-            // 没有 user 消息（极少见）→ 单独补一条，保证上下文不丢
-            return [...out, { role: 'user', content: ctxText }];
-        }
 
         function openMount() {
             renderMountList();
@@ -6030,40 +6074,6 @@
             } catch { /* 反馈失败静默 */ }
         }
 
-        /** prompt 拼上历史经验（放在最前面的「必须遵守」区）。无记忆时原样返回 */
-        function withMemories(prompt) {
-            return state.memories ? state.memories + '\n\n' + prompt : prompt;
-        }
-
-        // ---------- smart 模式的记忆注入（P1 修复 2026-10-27）----------
-        // 问题：smart 此前是零注入 —— 只有 workflow 的三条路径调 withMemories，
-        // 而小白档只能走 smart，结果「不让小白管理记忆」被顺手升级成「不让小白受益于记忆」。
-        // 管理与受益是两件事：记忆库按钮仍列在 TIER_TOOL_HIDE（小白看不到面板），
-        // 但 L1 硬约束必须进 prompt，否则小白生成的代码会重复踩已经沉淀过的坑。
-        //
-        // 长度保护：后端 MAX_SYSTEM_PROMPT_LEN=4000 是硬限，超了直接 400 INVALID_REQUEST。
-        // 记忆块最多 14 条（L1≤5/L2≤3/L3≤4/L4≤2）、单条 rule ≤500 字，理论上可达数千字，
-        // 所以先按行截断记忆（L1 排在最前 → 先保硬约束），再用 fitSystemPrompt 给用户
-        // 自定义提示词留余量。注：workflow 的 withMemories 路径没有这层保护（同样有潜在
-        // 风险，但不在本轮修复范围，改动它会变更四条 workflow 路径的 prompt 长度）。
-        const SMART_MEMORY_BUDGET = 2400;
-
-        function trimMemories(text) {
-            const s = String(text || '');
-            if (s.length <= SMART_MEMORY_BUDGET) return s;
-            const cut = s.slice(0, SMART_MEMORY_BUDGET);
-            const nl = cut.lastIndexOf('\n');
-            return (nl > 0 ? cut.slice(0, nl) : cut) + '\n（更多历史经验因长度省略）';
-        }
-
-        /** smart / 续写用的 systemPrompt：历史经验在前，用户自定义提示词在后 */
-        function smartSystemPrompt() {
-            const mem = trimMemories(state.memories);
-            const base = state.config.systemPrompt || '';
-            if (!mem) return base;
-            // 记忆当"固定部分"，用户提示词当"可截断部分"（两个都超时优先保记忆）
-            return fitSystemPrompt(mem, base, '（你的系统提示词过长已截断）');
-        }
 
         // ==================== 数据中心 ====================
 
@@ -7541,36 +7551,6 @@
          */
         const MAX_SYS_PROMPT_LEN = 3900;   // 后端 4000，留 100 余量
 
-        /**
-         * 拼「固定 prompt + 用户声明」并守住 systemPrompt 长度上限（2026-10-24）。
-         *
-         * 背景：后端 `MAX_SYSTEM_PROMPT_LEN = 4000` 是硬限，超了直接
-         * 400 INVALID_REQUEST，用户只看到"请求被拒绝"，完全不知道是自己写太长。
-         * 契约路径早有预算（先砍声明段并注明"已截断"），
-         * 但**需求分析路径没有** —— 用户把第 8 层不变量 / 第 9 层授权矩阵 /
-         * 功能点描述写长了，分析请求直接被拒（实测日志：chat validate failed）。
-         *
-         * 策略：只砍"用户声明"部分（固定 prompt 是规则，砍了就失效），
-         * 并在末尾注明已截断，让用户知道自己写的哪部分没进去。
-         */
-        function fitSystemPrompt(base, extra, note) {
-            base = base || '';
-            extra = extra || '';
-            if (!extra) return base;
-            const room = MAX_SYS_PROMPT_LEN - base.length - 4;
-            if (room <= 0) {
-                // 固定部分本身就超限：加声明只会更糟，原样返回（并提示）
-                if (typeof console !== 'undefined' && console.warn) {
-                    console.warn('[systemPrompt] 固定部分已超长，无法附加声明:', base.length);
-                }
-                return base;
-            }
-            const tail = '\n' + (note || '（声明过长已截断）');
-            const text = extra.length > room
-                ? extra.slice(0, Math.max(0, room - tail.length)) + tail
-                : extra;
-            return base + '\n\n' + text;
-        }
 
         function buildDualPrompt(tpl, contract, stack, dmText) {
             // dmText = 数据模型声明（第 7 层）。要先算进预算，否则契约 JSON 会把
@@ -8962,6 +8942,7 @@
 
         /** 模式切换：只有「需求工作流」模式才显示三层输入 */
         function syncReqPanel() {
+            syncComposerVisibility();   // 小白空白态：隐藏底部输入卡（避免两个主按钮）
             // 小白档不进需求工作流（已确认决策 2：小白只用简版向导）。
             // idle（没有生成进行中）时把 mode 归回 smart，否则会出现
             // 「三层表单被档位藏住、发送却走工作流分支」的死胡同。

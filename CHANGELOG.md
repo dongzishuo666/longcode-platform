@@ -4,6 +4,21 @@
 
 ---
 
+## 2026-10-28 · R2 架构重构 + 绿终端 UI
+
+### 新增（R2 重构：从 index.html 抽出纯逻辑模块）
+- **`deploy-pkg/web/project-mount.mjs`**（122 行）：项目挂载模块，把历史会话的资产挂到当前会话；依赖全部函数注入，零 DOM/window 引用。
+- **`deploy-pkg/web/prompt-assembly.mjs`**（84 行）：prompt 组装，只抽「纯文本拼接 + 长度预算」（记忆注入顺序、系统提示词截断），大段中文文案常量仍留页面。
+- **`deploy-pkg/web/state-migrate.mjs`**（110 行）：存量配置归一化/迁移纯函数（`normalizeMode`/`normalizeTier`/`ensureContextTokens`/`mergeUsage`/`pickCurrentConvId`/`migrateConfig`），不修改入参、不碰 DOM、不写 localStorage。
+
+### 优化（UI r11「绿终端」换皮）
+- **`deploy-pkg/web/index.html`**：紫罗兰配色改为翡翠「绿终端」纵向渐变；token 层降饱和三段渐变、文字层级回落、面板降噪；小白空白态去掉重复主按钮。对比度由 `test_css_health` 的静态 + 真浏览器双断言守住 ≥4.5。
+
+### 测试
+- 回归套数 78 → 83 全绿（0 红）；代码与守卫随上述模块拆分同步更新。
+
+---
+
 ## 2026-10-25
 
 ### 新增
