@@ -351,6 +351,95 @@ export async function validateReviewBody(body) {
   };
 }
 
+/** /api/spec-fill（AI 辅助填写）的边界 */
+const MAX_SPEC_FILL_DESC_LEN = 2000;
+const MIN_SPEC_FILL_TIMEOUT_MS = 3000;
+const MAX_SPEC_FILL_TIMEOUT_MS = 60000;
+
+/**
+ * 校验 /api/spec-fill 请求体（AI 辅助填写需求表单）。
+ * 与 /api/review 同构：provider 走同一套 SSRF / 白名单解析，只是没有代码、只有一句话。
+ * 超时默认比 review 宽松得多 —— 它要一次性产出十几个字段的 JSON，不是插队检查。
+ */
+export async function validateSpecFillBody(body) {
+  if (!body || typeof body !== 'object' || Array.isArray(body)) {
+    throw new AppError(ErrorCodes.INVALID_REQUEST, '请求体必须为 JSON 对象');
+  }
+
+  assertApiKey(body.apiKey);
+  const { provider, apiBase } = await resolveUpstream(body);
+
+  let model = defaultModelFor(provider);
+  if (body.model !== undefined && body.model !== null && body.model !== '') {
+    model = assertModel(body.model);
+  }
+
+  const description =
+    typeof body.description === 'string' ? body.description.trim() : '';
+  if (!description) {
+    throw new AppError(
+      ErrorCodes.INVALID_REQUEST,
+      'description 不能为空（用一句话描述你要做的东西）'
+    );
+  }
+  if (description.length > MAX_SPEC_FILL_DESC_LEN) {
+    throw new AppError(
+      ErrorCodes.INVALID_REQUEST,
+      `description 长度不得超过 ${MAX_SPEC_FILL_DESC_LEN} 字符`
+    );
+  }
+
+  // 覆盖策略由前端显式选择；默认 false = 只填空字段（安全的一侧）
+  const overwrite = body.overwrite === true;
+
+  let temperature = 0.2;
+  if (body.temperature !== undefined) {
+    const t = body.temperature;
+    if (typeof t !== 'number' || Number.isNaN(t) || t < 0 || t > 2) {
+      throw new AppError(ErrorCodes.INVALID_REQUEST, 'temperature 必须为 0–2 之间的数字');
+    }
+    temperature = t;
+  }
+
+  // JSON 里有 3–8 条 features + 实体字段，400 不够用
+  let maxTokens = 2000;
+  if (body.maxTokens !== undefined) {
+    const m = body.maxTokens;
+    if (!Number.isInteger(m) || m < 200 || m > 4000) {
+      throw new AppError(ErrorCodes.INVALID_REQUEST, 'maxTokens 必须为 200–4000 的整数');
+    }
+    maxTokens = m;
+  }
+
+  let timeoutMs = 20000;
+  if (body.timeoutMs !== undefined) {
+    const t = body.timeoutMs;
+    if (
+      !Number.isInteger(t) ||
+      t < MIN_SPEC_FILL_TIMEOUT_MS ||
+      t > MAX_SPEC_FILL_TIMEOUT_MS
+    ) {
+      throw new AppError(
+        ErrorCodes.INVALID_REQUEST,
+        `timeoutMs 必须为 ${MIN_SPEC_FILL_TIMEOUT_MS}–${MAX_SPEC_FILL_TIMEOUT_MS} 的整数`
+      );
+    }
+    timeoutMs = t;
+  }
+
+  return {
+    apiKey: body.apiKey,
+    model,
+    provider,
+    apiBase,
+    description,
+    overwrite,
+    temperature,
+    maxTokens,
+    timeoutMs,
+  };
+}
+
 /**
  * 校验 /api/static-check 请求体（零 token 静态校验）。
  * 注意：本接口为纯本地计算，不消耗 token，因此不要求 apiKey。

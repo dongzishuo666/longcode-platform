@@ -1694,6 +1694,29 @@
             transition: background-color var(--dur) var(--ease);
         }
 
+        /* ---------- AI 辅助填写卡片（2026-10-28） ---------- */
+        /* 只用虚线翡翠边 + 极淡底：它是"帮你填"的辅助块，不该和真正的必填层抢视觉重量 */
+        .req-ai {
+            border: 1px dashed var(--accent-line);
+            border-radius: var(--radius-md);
+            background: rgba(0,217,146,.04);
+            padding: 10px 12px;
+            margin-bottom: 14px;
+        }
+        .req-ai-head { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 6px; }
+        .req-ai-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-top: 8px; }
+        .req-ai-mode { gap: 6px; }
+        .req-ai-mode .req-opt { padding: 4px 10px; font-size: 12px; }
+        .req-ai-hint { font-size: 11.5px; color: var(--text-muted); }
+        .req-ai.busy { opacity: .72; }
+        .req-ai.busy .req-tag { pointer-events: none; }
+        /* AI 刚写进去的字段闪一下，让用户知道"哪几处变了"（1.3s 后自动消失） */
+        .ai-filled { animation: aiFilled 1.3s var(--ease); }
+        @keyframes aiFilled {
+            0% { box-shadow: 0 0 0 2px rgba(0,217,146,.55); border-radius: 6px; }
+            100% { box-shadow: 0 0 0 0 rgba(0,217,146,0); border-radius: 6px; }
+        }
+
         /* 终端扫描线（用户方案 §4，很克制）：只做观感。
            必须 pointer-events:none（不能挡点击），z-index 2 远低于欢迎层/弹窗的 1300。 */
         body::after {
@@ -2531,6 +2554,25 @@
                         </div>
 
                         <div class="req-body" id="reqBody">
+                <!-- AI 辅助填写（2026-10-28）：一句话 → 起草全表。
+                     只写表单状态（state.config.req），不参与生成链路；生成时照读表单。
+                     两档都显示：程序员档降低填表成本，小白档（工作流模式）同样受益。 -->
+                <div class="req-ai" id="reqAiBox">
+                    <div class="req-ai-head">
+                        <span class="req-title">✨ AI 辅助填写</span>
+                        <span class="req-sub">用一句话描述需求，AI 起草其余字段（可编辑）</span>
+                    </div>
+                    <textarea id="reqAiInput" class="req-input" rows="2"
+                        placeholder="例：做一个团队周报工具，成员提交后自动聚合成一份周报，支持导出 Markdown"></textarea>
+                    <div class="req-ai-actions">
+                        <button type="button" class="req-tag" id="reqAiBtn">🤖 AI 帮我填写</button>
+                        <div class="req-opts req-ai-mode" id="reqAiMode">
+                            <button type="button" class="req-opt active" data-v="empty">🩹 只填空字段</button>
+                            <button type="button" class="req-opt" data-v="overwrite">♻️ 覆盖已填内容</button>
+                        </div>
+                        <span class="req-ai-hint" id="reqAiHint">消耗一次模型调用 · 结果可继续编辑</span>
+                    </div>
+                </div>
                         <!-- 项目预设（2026-10-23）：常见项目类型一键预填数据模型/授权/不变量/交付项。
                              降低从零填写成本——多数用户的数据模型高度同构，不该重填一遍。 -->
                         <div class="req-tags" id="reqPresets">
@@ -3024,6 +3066,11 @@
     <script type="module">
         import { createStateMigrate } from './state-migrate.mjs';
         window.createStateMigrate = createStateMigrate;
+    </script>
+    <!-- AI 起草结果合并（第 2 步）：状态级合并，渲染复用 syncReqUI。 -->
+    <script type="module">
+        import { createSpecFillApplier } from './spec-fill-apply.mjs';
+        window.createSpecFillApplier = createSpecFillApplier;
     </script>
     <script>
         // ==================== 全局状态 ====================
@@ -5851,6 +5898,27 @@
             return __sm;
         }
 
+        // ---------- AI 起草结果 → 需求表单（第 2 步 2026-10-28：实现搬到 spec-fill-apply.mjs）----------
+        // 走状态级合并（state.config.req + syncReqUI），不逐控件写 DOM ——
+        // 否则动态行会出现"预设填的"和"AI 填的"两套结构，删除/编辑逻辑分叉。
+        let __sfa = null;
+        function specFillApplier() {
+            if (__sfa) return __sfa;
+            const factory = window.createSpecFillApplier;
+            if (!factory) throw new Error('spec-fill-apply.mjs 未加载（window.createSpecFillApplier 缺失）');
+            __sfa = factory({
+                getReq: () => state.config.req,
+                setReq: (r) => { state.config.req = r; },
+                collectReq,
+                syncReqUI,
+                saveAll,
+                showStatus: (t, k) => showStatus(t, k)   // 调用时解析：测试会覆盖它
+            });
+            return __sfa;
+        }
+        /** 把 /api/spec-fill 的 spec 合并进表单（供 UI 按钮与自检调用） */
+        function applySpecFill(spec, opt) { return specFillApplier().applySpecFill(spec, opt); }
+
         /**
          * 为本次提问准备"项目现有实现"（2026-10-25 第 3 步）。
          *
@@ -8468,6 +8536,123 @@
             showStatus(`📦 已套用「${p.label}」预设（数据模型 / 授权 / 不变量 / 交付项已填，第 1、2 层请按实际需求填写）`, 'success');
         }
 
+        // ==================== AI 辅助填写（2026-10-28） ====================
+        // 一句话 → /api/spec-fill → applySpecFill（状态级合并）→ syncReqUI。
+        // 三个刻意的取舍：
+        //   ① 不自动触发、不自动重试：一次点击 = 一次模型调用（成本可见）
+        //   ② 30s 冷却：手抖双击不该烧两次
+        //   ③ 失败一律不动表单：degraded / 超时 / 网络异常都只提示，不写半截
+        (function bindSpecFillUI() {
+            const box = document.getElementById('reqAiBox');
+            const input = document.getElementById('reqAiInput');
+            const btn = document.getElementById('reqAiBtn');
+            const modeBox = document.getElementById('reqAiMode');
+            if (!box || !input || !btn || !modeBox) return;
+
+            const COOLDOWN_MS = 30000;
+            const TIMEOUT_MS = 25000;
+            let busy = false;
+            let lastAt = 0;
+
+            // 回填后闪一下，让用户看到"哪几处变了"（键名 = state.config.req 的键）
+            const HL = {
+                goal: () => els.reqGoal, stack: () => els.reqStack,
+                conSecurity: () => els.reqConSecurity, conPerf: () => els.reqConPerf,
+                conStyle: () => els.reqConStyle, conBanned: () => els.reqConBanned,
+                constraints: () => els.reqConstraints,
+                order: () => els.reqOrder, contractStrict: () => els.reqStrict,
+                deliver: () => els.reqDeliver, level: () => els.reqLevel,
+                withTest: () => els.reqTest, withDeploy: () => els.reqDeploy,
+                withMigration: () => els.reqMigration, withAuthMw: () => els.reqAuthMw,
+                withErrorMw: () => els.reqErrorMw, withEntry: () => els.reqEntry,
+                features: () => els.featList, dataModel: () => els.dmEntities,
+                invariants: () => els.dmInvariants, authz: () => els.authzRules
+            };
+            function flash(keys) {
+                for (const k of keys || []) {
+                    const el = (HL[k] || (() => null))();
+                    if (!el || !el.classList) continue;
+                    el.classList.add('ai-filled');
+                    setTimeout(() => el.classList.remove('ai-filled'), 1400);
+                }
+            }
+
+            // 覆盖策略是单选组：原有四组（order/strict/deliver/level）各自绑过点击，
+            // 这一组是新加的，必须自己绑 —— 否则点了没反应，永远停在「只填空字段」。
+            modeBox.addEventListener('click', (e) => {
+                const b = e.target.closest('.req-opt');
+                if (!b) return;
+                for (const x of modeBox.querySelectorAll('.req-opt')) {
+                    x.classList.toggle('active', x === b);
+                }
+            });
+
+            btn.addEventListener('click', async () => {
+                if (busy) return;
+                const now = Date.now();
+                if (now - lastAt < COOLDOWN_MS) {
+                    const left = Math.ceil((COOLDOWN_MS - (now - lastAt)) / 1000);
+                    showStatus(`AI 起草冷却中（${left}s 后可再试）`, 'warning');
+                    return;
+                }
+                // 输入框为空就回落到第 1 层"功能与最终效果"
+                const desc = (input.value || '').trim() || (els.reqGoal.value || '').trim();
+                if (!desc) {
+                    showStatus('先用一句话描述你要做的东西', 'warning');
+                    input.focus();
+                    return;
+                }
+                if (!state.config.apiKey) {
+                    showStatus('先在顶栏填 API 密钥', 'warning');
+                    return;
+                }
+                const mode = activeVal(modeBox, 'empty') === 'overwrite' ? 'overwrite' : 'empty';
+                const label = btn.textContent;
+
+                busy = true;
+                lastAt = now;
+                box.classList.add('busy');
+                btn.textContent = '⏳ 起草中…';
+                try {
+                    const cfg = state.config;
+                    const resp = await fetchWithTimeout(`${cfg.apiBase}/spec-fill`, {
+                        method: 'POST',
+                        headers: apiHeaders(),
+                        body: JSON.stringify({
+                            apiKey: cfg.apiKey,
+                            model: cfg.model,
+                            provider: cfg.provider,
+                            apiBase: cfg.providerBase || '',
+                            description: desc,
+                            overwrite: mode === 'overwrite',
+                            timeoutMs: 20000
+                        })
+                    }, TIMEOUT_MS);
+
+                    if (!resp.ok) {
+                        let msg = String(resp.status);
+                        try { const e = await resp.json(); if (e && e.message) msg = e.message; } catch { /* 非 JSON 响应 */ }
+                        showStatus(`AI 起草失败：${msg}`, 'error');
+                        return;
+                    }
+                    const data = await resp.json();
+                    if (data.timedOut || data.degraded) {
+                        showStatus('AI 返回的内容无法解析，已保留原表单（可重试一次）', 'warning');
+                        return;
+                    }
+                    const r = applySpecFill(data.spec, { mode, description: desc });
+                    if (r.filled) flash(r.applied);
+                } catch (err) {
+                    // 超时 / 断网：一律不动表单
+                    showStatus('AI 起草超时或网络异常（表单未改动）', 'warning');
+                } finally {
+                    busy = false;
+                    box.classList.remove('busy');
+                    btn.textContent = label;
+                }
+            });
+        })();
+
         /**
          * 完成度联动（用户 7.2）：
          *   · 选生产级 → 自动勾上"能跑的工程必须有"的交付项（测试/迁移/鉴权/错误处理/入口），
@@ -9800,6 +9985,8 @@
                 createConversation,
                 quality: () => state.quality,
                 workflow: () => state.workflow,
+                config: () => state.config,
+                req: () => state.config.req,   // 需求表单草稿（AI 起草的落点）
                 conversations: () => state.conversations,
                 currentConvId: () => state.currentConvId,
             };

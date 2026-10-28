@@ -4,6 +4,7 @@
  * 路由：
  *   POST /api/chat    流式对话（SSE，标准化事件）
  *   POST /api/review  增量代码审查（非流式 + 强制 JSON + 关闭思考链 + 独立超时）
+ *   POST /api/spec-fill AI 辅助填写需求表单（非流式 + 强制 JSON，只写表单不参与生成）
  *   POST /api/static-check 零 token 静态校验（Tree-sitter 语法/符号/冲突/压缩）
  *   POST /api/extract-api  零 token 接口提取（前端调用 / 后端路由定义）
  *   POST /api/consistency  零 token 三方一致性比对（契约 / 前端 / 后端）
@@ -23,6 +24,7 @@ import {
   validateChatBody,
   validateTestBody,
   validateReviewBody,
+  validateSpecFillBody,
   validateStaticCheckBody,
   validateExtractApiBody,
   validateConsistencyBody,
@@ -64,6 +66,11 @@ import {
   hasBlockingIssue,
 } from './lib/review.js';
 import { TITLE_SYSTEM_PROMPT, TITLE_TIMEOUT_MS, normalizeTitle } from './lib/title.js';
+import {
+  SPEC_FILL_SYSTEM_PROMPT,
+  buildSpecFillUserPrompt,
+  normalizeSpecFill,
+} from './lib/spec-fill.js';
 
 const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -533,6 +540,80 @@ app.post('/api/review', async (req, reply) => {
 
     const body = toErrorBody(err);
     req.log.warn({ code: body.code, message: body.message, ms }, 'review failed');
+    return reply.code(httpStatusOf(body.code)).send(body);
+  }
+});
+
+// ---------- /api/spec-fill（AI 辅助填写需求表单，2026-10-28） ----------
+// 定位：程序员档 workflow 表单的"自然语言起草"。只写表单，不参与生成链路。
+// 与 /api/review 同构（非流式 + 强制 JSON + 独立超时），但输出是结构化表单而不是问题清单。
+// 刻意复用 callReview：它就是个"非流式 + 强制 JSON + 超时 AbortController"的通路；
+// 另抽一个通用 callModel 会动到审查主链路，收益不抵风险（要做另开一轮）。
+app.post('/api/spec-fill', async (req, reply) => {
+  let parsed;
+  try {
+    parsed = await validateSpecFillBody(req.body);
+  } catch (err) {
+    const body = toErrorBody(err);
+    req.log.warn({ code: body.code, message: body.message }, 'spec-fill validate failed');
+    return reply.code(httpStatusOf(body.code)).send(body);
+  }
+
+  const startedAt = Date.now();
+  try {
+    const { content, usage } = await callReview({
+      apiBase: parsed.apiBase,
+      apiKey: parsed.apiKey,
+      model: parsed.model,
+      provider: parsed.provider,
+      systemPrompt: SPEC_FILL_SYSTEM_PROMPT,
+      userPrompt: buildSpecFillUserPrompt({ description: parsed.description }),
+      temperature: parsed.temperature,
+      maxTokens: parsed.maxTokens,
+      timeoutMs: parsed.timeoutMs,
+    });
+
+    const ms = Date.now() - startedAt;
+    // 解析失败 → spec 为空 + degraded:true，前端据此【一个字段都不写】
+    //（半截污染比不填更糟：用户会以为 AI 看懂了，实则一半是编的）
+    const { spec, filledCount, degraded, parseError, raw } = normalizeSpecFill(content);
+
+    req.log.info(
+      { ms, model: parsed.model, filledCount, degraded, parseError, overwrite: parsed.overwrite },
+      'spec-fill done'
+    );
+
+    return reply.send({
+      ok: true,
+      spec,
+      filledCount,
+      overwrite: parsed.overwrite,
+      degraded,
+      parseError,
+      raw,
+      ms,
+      usage,
+      model: parsed.model,
+    });
+  } catch (err) {
+    const ms = Date.now() - startedAt;
+
+    // 超时按 review 的取舍：返回 200 + 标记，不让一次起草失败变成错误弹窗
+    if (err && err.code === ErrorCodes.TIMEOUT) {
+      req.log.warn({ ms, timeoutMs: parsed.timeoutMs }, 'spec-fill timeout');
+      return reply.send({
+        ok: true,
+        timedOut: true,
+        spec: {},
+        filledCount: 0,
+        degraded: true,
+        ms,
+        model: parsed.model,
+      });
+    }
+
+    const body = toErrorBody(err);
+    req.log.warn({ code: body.code, message: body.message, ms }, 'spec-fill failed');
     return reply.code(httpStatusOf(body.code)).send(body);
   }
 });

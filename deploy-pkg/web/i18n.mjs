@@ -75,6 +75,16 @@ export const ZH2EN = {
     '配额': 'Quota',
     '从空白开始': 'Start from scratch',
     '不套预设，自由描述你想要什么': 'No preset — describe what you want freely',
+    // ===== AI 辅助填写（2026-10-28） =====
+    '✨ AI 辅助填写': '✨ AI-assisted fill',
+    '用一句话描述需求，AI 起草其余字段（可编辑）':
+        'Describe it in one sentence; AI drafts the rest (still editable)',
+    '例：做一个团队周报工具，成员提交后自动聚合成一份周报，支持导出 Markdown':
+        'e.g. A team weekly-report tool: members submit, it aggregates a report and exports Markdown',
+    '🤖 AI 帮我填写': '🤖 Fill it for me',
+    '🩹 只填空字段': '🩹 Only fill empty fields',
+    '♻️ 覆盖已填内容': '♻️ Overwrite filled fields',
+    '消耗一次模型调用 · 结果可继续编辑': 'Uses one model call · result stays editable',
     '自定义': 'Custom',
     '预览修复': 'Preview fixes',
     '👁 预览': '👁 Preview',

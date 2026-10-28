@@ -4,6 +4,22 @@
 
 ---
 
+## 2026-10-28 · AI 辅助填写需求表单
+
+### 新增（AI 辅助填写）
+- **`POST /api/spec-fill`**（`deploy-pkg/deepseek-proxy/server.js` + `lib/spec-fill.js`）：用一句话描述需求，模型起草结构化需求表单。与 `/api/review` 同构（非流式 + 强制 JSON + 独立超时），只写表单、不参与生成链路。
+- **`lib/spec-fill.js`**（273 行）：固定 system prompt（命中上游前缀缓存）+ 容错解析 + 白名单 + 枚举校验 + 长度/条数上限。**解析失败返回空 spec**（半截污染比不填更糟）；枚举越界一律丢弃，不"就近匹配"成别的选项。
+- **`deploy-pkg/web/spec-fill-apply.mjs`**（171 行）：起草结果 → 表单的**状态级合并层**。写 `state.config.req` 后交给 `syncReqUI()` 统一重渲染（与 `applyPreset` 同一套路），动态行/去重/联动全部复用，避免"预设填的行"与"AI 填的行"两套 DOM 分叉。
+- **需求表单顶部「✨ AI 辅助填写」卡片**（`index.html`）：一句话输入 + 覆盖策略二选一（🩹 只填空字段 / ♻️ 覆盖已填内容）+ 回填后 1.4s 高亮。**不自动触发**（成本可见）、30s 冷却（防误双击）、失败一律不动表单。两种档位都显示。
+
+### 修复
+- **`lib/validate.js`**：新增 `validateSpecFillBody`——`description` 非空且 ≤2000 字符，`overwrite` 默认 `false`（安全侧），`maxTokens` 默认 2000、`timeoutMs` 默认 20s，provider 复用同一套 SSRF / 白名单解析。
+
+### 测试
+- 新增 `test_spec_fill.mjs`（后端 8 节）与 `test_spec_fill_ui.mjs`（前端 7 节，含真页面 DOM 更新与 mock fetch 点击流）。其中后端测试会读取前端 `collectReq` 源码做**键名双向交叉校验**，防止前后端字段清单漂移。回归套数 83 → 85 全绿。
+
+---
+
 ## 2026-10-28 · R2 架构重构 + 绿终端 UI
 
 ### 新增（R2 重构：从 index.html 抽出纯逻辑模块）
