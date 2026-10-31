@@ -21,6 +21,53 @@ export function createPromptAssembly(deps) {
     } = deps || {};
 
     /**
+     * 本轮记忆预算的账本（2026-10-31）：
+     * 后端 `formatMemoriesForPrompt` 的输出是「1 行表头 + 每条记忆 1 行」，
+     * 而 trimMemories 按最后一个换行截断 —— 所以"活下来几条"是可以精确算的：
+     *   存活完整行数 − 1（表头）= 实际注入条数。
+     *
+     * 为什么需要它：被裁掉的记忆**不能**出现在"帮到了"的可点列表里，
+     * 否则用户会给一条根本没进 prompt 的经验记正向反馈，直接污染半衰期权重。
+     *
+     * @param {Array<{id?:string,type?:string}>} items 召回条目（顺序 = prompt 行顺序）
+     * @param {string} promptText 后端给的整块 prompt 原文
+     * @param {number} [budget] 预算（默认取工厂的 memoryBudget）
+     */
+    function planMemoryBudget(items, promptText, budget) {
+        const list = Array.isArray(items) ? items : [];
+        const limit = Number.isFinite(Number(budget)) ? Number(budget) : memoryBudget;
+        const text = String(promptText || '');
+        const empty = { injected: [], dropped: [], byType: {}, truncated: false, total: 0 };
+        if (!list.length) return empty;
+
+        let kept = list.length;
+        let truncated = false;
+        if (text.length > limit) {
+            truncated = true;
+            const cut = text.slice(0, limit);
+            const nl = cut.lastIndexOf('\n');
+            const lines = (nl > 0 ? cut.slice(0, nl) : '').split('\n').filter(l => l.trim());
+            // 减掉表头那一行；没有表头（整块被裁）时按 0 条算
+            kept = Math.max(0, lines.length - 1);
+        }
+        kept = Math.min(kept, list.length);
+
+        const take = (m) => ({
+            id: String((m && m.id) || ''),
+            type: String((m && m.type) || ''),
+            rule: String((m && m.rule) || '')
+        });
+        const injected = list.slice(0, kept).map(take);
+        const dropped = list.slice(kept).map(take);
+        const byType = {};
+        for (const m of injected) {
+            const t = m.type || 'unknown';
+            byType[t] = (byType[t] || 0) + 1;
+        }
+        return { injected, dropped, byType, truncated, total: list.length };
+    }
+
+    /**
      * 把 extra 追加到 base 后面，总量不超 maxSysLen；
      * base 本身已超限时原样返回（再加声明只会更糟）。
      */
@@ -80,5 +127,29 @@ export function createPromptAssembly(deps) {
         return [...out, { role: 'user', content: ctxText }];
     }
 
-    return { fitSystemPrompt, trimMemories, withMemories, smartSystemPrompt, withProjectContext };
+    return {
+        fitSystemPrompt, trimMemories, withMemories, smartSystemPrompt, withProjectContext,
+        planMemoryBudget, memoryTraceText
+    };
+}
+
+/**
+ * 标注文案（纯函数，便于单测）：
+ *   「本轮注入 3 条经验（L1×2 / L2×1），1 条因预算未注入」
+ * 没有任何注入时返回空串（调用方据此不渲染那一行）。
+ */
+export function memoryTraceText(plan) {
+    const p = plan || {};
+    const total = Number(p.injected ? p.injected.length : 0);
+    if (!total) return '';
+    const byType = p.byType || {};
+    const order = ['L1', 'L2', 'L3', 'L4'];
+    const parts = order.filter(t => byType[t]).map(t => `${t}×${byType[t]}`);
+    const others = Object.keys(byType).filter(t => !order.includes(t))
+        .map(t => `${t}×${byType[t]}`);
+    const all = [...parts, ...others];
+    const dropped = Number(p.dropped ? p.dropped.length : 0);
+    return `本轮注入 ${total} 条经验`
+        + (all.length ? `（${all.join(' / ')}）` : '')
+        + (dropped ? `，${dropped} 条因预算未注入` : '');
 }

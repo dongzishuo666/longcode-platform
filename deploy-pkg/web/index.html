@@ -506,10 +506,43 @@
             font-size: 12px;
         }
 
-        .code-copy-btn {
+        /* 代码块右上角的工具条：复制 + 重写。
+           用 flex 容器而不是两个绝对定位 —— 后者会随文案长度互相压盖（复制按钮一度被压住）。 */
+        .code-tools {
             position: absolute;
             top: 8px;
             right: 8px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+        .code-rewrite-btn {
+            background: var(--bg-tertiary);
+            border: 1px solid var(--accent-line);
+            color: var(--accent-color);
+            padding: 4px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+            font-family: inherit;
+            opacity: 0;
+            transition: opacity var(--dur) var(--ease);
+        }
+        pre:hover .code-rewrite-btn, .code-rewrite-btn:focus-visible { opacity: 1; }
+        .code-rewrite-btn:hover { border-color: var(--accent-color); }
+        .code-rewrite-btn:disabled { opacity: .55; cursor: default; }
+
+        /* 大文件重写前的内联确认（不用原生 confirm：它会阻断整页） */
+        .code-confirm-tip { font-size: 11.5px; color: var(--warning-color); white-space: nowrap; }
+        .code-confirm-btn {
+            background: var(--bg-tertiary); border: 1px solid var(--border-color);
+            color: var(--text-secondary); padding: 3px 8px; border-radius: 4px;
+            cursor: pointer; font-size: 11.5px; font-family: inherit;
+        }
+        .code-confirm-btn.primary { border-color: var(--accent-line); color: var(--accent-color); }
+        .code-confirm-btn:hover { border-color: var(--accent-color); }
+
+        .code-copy-btn {
             background: var(--bg-tertiary);
             border: 1px solid var(--border-color);
             color: var(--text-secondary);
@@ -1708,6 +1741,13 @@
         .req-ai-mode { gap: 6px; }
         .req-ai-mode .req-opt { padding: 4px 10px; font-size: 12px; }
         .req-ai-hint { font-size: 11.5px; color: var(--text-muted); }
+        /* 文字链式按钮：重试是"补充操作"，不该和主按钮抢视觉重量 */
+        .req-ai-link {
+            background: none; border: none; padding: 0; font-family: inherit;
+            font-size: 12px; color: var(--accent-color); cursor: pointer;
+            text-decoration: underline dotted; text-underline-offset: 3px;
+        }
+        .req-ai-link:hover { color: var(--accent-hover); }
         .req-ai.busy { opacity: .72; }
         .req-ai.busy .req-tag { pointer-events: none; }
         /* AI 刚写进去的字段闪一下，让用户知道"哪几处变了"（1.3s 后自动消失） */
@@ -2216,44 +2256,93 @@
             background: var(--accent-soft); color: var(--accent-color);
         }
 
-        /* ---------- 生成流水线（绑真实 stage，不做假动画） ---------- */
-        .pipeline {
-            width: 100%; margin: 0 0 10px; padding: 10px 14px;
+        /* ---------- 生成流水线状态条（2026-10-29 改版：单行 34px） ---------- */
+        /* 刻意不做"演示运行"假动画：4 段进度必须来自真实 stage。
+           高度：padding 7×2 + 内容 ~20 → 34px 左右，比旧的两行结构矮一半。 */
+        .pipe-bar {
+            display: flex; align-items: center; gap: 10px;
+            width: 100%; margin: 0 0 10px; padding: 7px 14px;
             background: var(--bg-secondary); border: 1px solid var(--border-color);
             border-radius: var(--radius-md);
+            font-size: 12px; color: var(--text-secondary);
+            transition: opacity var(--dur) var(--ease);
         }
-        .pipe-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 9px; }
-        .pipe-title { font-size: 12.5px; font-weight: 700; color: var(--text-secondary); }
-        .pipe-status { font-size: 11px; color: var(--text-muted); font-family: ui-monospace, Menlo, monospace; }
-        .pipe-track { display: flex; align-items: center; }
-        .node { flex: 1; display: flex; align-items: center; gap: 6px; min-width: 0; }
-        .node:not(:last-child)::after {
-            content: ""; flex: 1; height: 2px; margin: 0 8px 0 4px;
-            background: var(--border-color); border-radius: 2px; min-width: 8px;
+        .pipe-bar.pipe-done { opacity: .72; }
+        .pipe-dot {
+            width: 7px; height: 7px; border-radius: 50%; flex: none;
+            background: var(--border-strong); transition: all var(--dur) var(--ease);
         }
-        .node-dot {
-            width: 9px; height: 9px; border-radius: 50%; flex: none;
-            background: var(--bg-hover); border: 1px solid var(--border-strong);
-            transition: all var(--dur) var(--ease);
+        .pipe-dot.running {
+            background: var(--accent-color); box-shadow: 0 0 0 3px var(--accent-soft);
+            animation: pipePulse 1.4s ease-in-out infinite;
         }
-        .node-name { font-size: 11.5px; color: var(--text-muted); white-space: nowrap; }
-        .node-state { font-size: 10.5px; color: var(--text-muted); opacity: .75; white-space: nowrap; }
-        .node.running .node-dot {
-            background: var(--accent-color); border-color: var(--accent-color);
-            box-shadow: 0 0 0 4px var(--accent-soft); animation: pipePulse 1.4s ease-in-out infinite;
+        .pipe-dot.done { background: var(--success-color); }
+        .pipe-dot.err { background: var(--error-color); box-shadow: 0 0 0 3px var(--error-soft); }
+        .pipe-name { font-weight: 600; white-space: nowrap; }
+        .pipe-segs { display: flex; align-items: center; gap: 4px; flex: none; }
+        .pipe-segs i {
+            display: block; width: 14px; height: 3px; border-radius: 2px;
+            background: var(--border-color); transition: background var(--dur) var(--ease);
         }
-        .node.running .node-name, .node.running .node-state { color: var(--accent-color); opacity: 1; }
-        .node.done .node-dot { background: var(--success-color); border-color: var(--success-color); }
-        .node.done .node-name { color: var(--text-secondary); }
-        .node.done .node-state { color: var(--success-color); opacity: 1; }
-        .node.done:not(:last-child)::after { background: var(--success-color); opacity: .5; }
+        .pipe-segs i.done { background: var(--success-color); opacity: .85; }
+        .pipe-segs i.cur { background: var(--accent-color); animation: pipePulseSoft 1.4s ease-in-out infinite; }
+        /* 跳过的阶段：虚线空心 —— 既不是"已完成"，也不是"还没到" */
+        .pipe-segs i.skip { background: transparent; border: 1px dashed var(--border-strong); }
+        .pipe-meta {
+            font-family: ui-monospace, Menlo, monospace; font-size: 11px;
+            color: var(--text-muted); white-space: nowrap;
+        }
+        .pipe-act {
+            margin-left: auto; font-size: 11.5px; color: var(--accent-color);
+            cursor: pointer; white-space: nowrap; user-select: none;
+        }
+        .pipe-act:hover { color: var(--accent-hover); text-decoration: underline; }
         @keyframes pipePulse { 0%, 100% { box-shadow: 0 0 0 3px var(--accent-soft); } 50% { box-shadow: 0 0 0 6px var(--accent-soft); } }
+        @keyframes pipePulseSoft { 0%, 100% { opacity: .55; } 50% { opacity: 1; } }
+
+        /* ---------- 本轮记忆标注（2026-10-31） ---------- */
+        .mem-trace {
+            display: flex; align-items: center; flex-wrap: wrap; gap: 8px;
+            width: 100%; margin: 0 0 8px; padding: 6px 12px;
+            background: rgba(0,217,146,.05); border: 1px solid var(--border-color);
+            border-radius: var(--radius-md);
+            font-size: 11.5px; color: var(--text-muted);
+        }
+        .mem-trace-ico { font-size: 12px; }
+        .mem-trace-text { color: var(--text-secondary); }
+        .mem-trace-toggle {
+            margin-left: auto; background: none; border: none; padding: 0;
+            font-family: inherit; font-size: 11.5px; color: var(--accent-color);
+            cursor: pointer; text-decoration: underline dotted; text-underline-offset: 3px;
+        }
+        .mem-trace-list {
+            flex-basis: 100%; display: flex; flex-direction: column; gap: 6px;
+            margin-top: 6px; padding-top: 6px; border-top: 1px dashed var(--border-color);
+        }
+        .mem-trace-row {
+            display: flex; align-items: center; gap: 8px;
+            font-size: 11.5px; color: var(--text-secondary);
+        }
+        .mem-trace-tag {
+            flex: none; font-size: 10px; padding: 1px 5px; border-radius: 4px;
+            background: var(--accent-soft); color: var(--accent-color);
+            font-family: ui-monospace, Menlo, monospace;
+        }
+        .mem-trace-rule { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .mem-trace-btn {
+            flex: none; background: none; border: 1px solid var(--border-color);
+            border-radius: 4px; padding: 1px 6px; font-size: 11px; cursor: pointer;
+            color: var(--text-secondary); font-family: inherit;
+        }
+        .mem-trace-btn:hover { border-color: var(--accent-color); color: var(--accent-color); }
+        .mem-trace-btn:disabled { opacity: .45; cursor: default; }
+        .mem-trace-done { flex: none; font-size: 11px; color: var(--success-color); }
 
         @media (max-width: 720px) {
             .tpl-grid { grid-template-columns: 1fr; }
             .hero-title { font-size: 21px; }
-            .pipe-track { flex-direction: column; align-items: stretch; gap: 6px; }
-            .node:not(:last-child)::after { display: none; }
+            /* 窄屏：只留 "2/4"，隐藏耗时，避免换行把状态条撑高 */
+            .pipe-time { display: none; }
         }
 
         /* ---------- 移动端：侧栏改抽屉（2026-10-24 第 3 步） ---------- */
@@ -2566,6 +2655,11 @@
                         placeholder="例：做一个团队周报工具，成员提交后自动聚合成一份周报，支持导出 Markdown"></textarea>
                     <div class="req-ai-actions">
                         <button type="button" class="req-tag" id="reqAiBtn">🤖 AI 帮我填写</button>
+                        <!-- 撤销（2026-10-29）：起草前快照 req，不满意可一键回到起草前。
+                             overwrite 模式下原有内容会被冲掉，没有撤销就不可逆。 -->
+                        <button type="button" class="req-tag" id="reqAiUndo" style="display: none;">↩️ 撤销本次填写</button>
+                        <!-- 重试入口：失败后不想重新想一遍，就用上次那句再来 -->
+                        <button type="button" class="req-ai-link" id="reqAiRetry" style="display: none;">🔁 用上次描述重试</button>
                         <div class="req-opts req-ai-mode" id="reqAiMode">
                             <button type="button" class="req-opt active" data-v="empty">🩹 只填空字段</button>
                             <button type="button" class="req-opt" data-v="overwrite">♻️ 覆盖已填内容</button>
@@ -2764,36 +2858,28 @@
                         </div>
                     </div>
 
-                    <!-- 生成流水线（2026-10-24 第 2 步）：绑 state.workflow.stage，
+                    <!-- 生成流水线状态条（2026-10-29 改版：单行 34px）：绑 state.workflow.stage，
                          不在跑的时候整条隐藏。刻意不做"演示运行"假动画 ——
-                         节点状态必须来自真实阶段，否则就是骗人。 -->
-                    <div class="pipeline" id="pipelineBar" style="display:none;">
-                        <div class="pipe-head">
-                            <span class="pipe-title">生成流水线</span>
-                            <span class="pipe-status" id="pipeStatus">idle</span>
-                        </div>
-                        <div class="pipe-track" id="pipeTrack">
-                            <div class="node" data-stage="analyzing">
-                                <span class="node-dot"></span>
-                                <span class="node-name">需求解析</span>
-                                <span class="node-state">等待</span>
-                            </div>
-                            <div class="node" data-stage="contract">
-                                <span class="node-dot"></span>
-                                <span class="node-name">契约生成</span>
-                                <span class="node-state">等待</span>
-                            </div>
-                            <div class="node" data-stage="generating">
-                                <span class="node-dot"></span>
-                                <span class="node-name">代码生成</span>
-                                <span class="node-state">等待</span>
-                            </div>
-                            <div class="node" data-stage="review">
-                                <span class="node-dot"></span>
-                                <span class="node-name">审查与对齐</span>
-                                <span class="node-state">等待</span>
-                            </div>
-                        </div>
+                         段进度必须来自真实阶段，否则就是骗人。
+                         4 段 = 4 个真实 stage（analyzing/contract/generating/review）；
+                         双端模式跳过「需求解析」，那一段显示为虚线空心（.skip），不伪装成已完成。 -->
+                    <div class="pipe-bar" id="pipelineBar" style="display:none;">
+                        <span class="pipe-dot" id="pipeDot"></span>
+                        <span class="pipe-name" id="pipeName">需求解析</span>
+                        <span class="pipe-segs" id="pipeSegs"><i></i><i></i><i></i><i></i></span>
+                        <span class="pipe-meta" id="pipeMeta">1/4<span class="pipe-time" id="pipeTime"> · 0.0s</span></span>
+                        <span class="pipe-act" id="pipeAct"></span>
+                    </div>
+
+                    <!-- 本轮记忆标注（2026-10-31）：注入了几条、按层分布、几条被预算裁掉。
+                         放在输入卡上方而不是消息流里 —— 消息流每次 renderMessages 都重建，
+                         塞进去会跟着闪；这里只在下一次召回开始时刷新。
+                         只列【真正进了 prompt】的条目：给没进 prompt 的经验点"帮到了"是假信号。 -->
+                    <div class="mem-trace" id="memTraceBar" style="display:none;">
+                        <span class="mem-trace-ico">🧠</span>
+                        <span class="mem-trace-text" id="memTraceText"></span>
+                        <button type="button" class="mem-trace-toggle" id="memTraceToggle">查看</button>
+                        <div class="mem-trace-list" id="memTraceList" style="display:none;"></div>
                     </div>
 
                     <div class="input-wrapper" id="inputWrapper">
@@ -3066,6 +3152,11 @@
     <script type="module">
         import { createStateMigrate } from './state-migrate.mjs';
         window.createStateMigrate = createStateMigrate;
+    </script>
+    <!-- 文件级重写（P1-1）：意图驱动重写单个代码块，复检通过才落盘。 -->
+    <script type="module">
+        import { createBlockRewrite } from './block-rewrite.mjs';
+        window.createBlockRewrite = createBlockRewrite;
     </script>
     <!-- AI 起草结果合并（第 2 步）：状态级合并，渲染复用 syncReqUI。 -->
     <script type="module">
@@ -3852,6 +3943,7 @@
             reqAdv: document.getElementById('reqAdv'),
             reqAdvToggle: document.getElementById('reqAdvToggle'),
             reqConstraints: document.getElementById('reqConstraints'),
+            reqAiInput: document.getElementById('reqAiInput'),
             dmPkType: document.getElementById('dmPkType'),
             dmMoneyUnit: document.getElementById('dmMoneyUnit'),
             dmEntities: document.getElementById('dmEntities'),
@@ -3921,6 +4013,10 @@
             const at = new Date().toLocaleTimeString('zh-CN', { hour12: false });
             state.lastError = { code: d.code, message: d.detail, title: d.title, at };
             console.error(`[${d.code}] ${d.title}`, d.detail || '', opts.raw || '');
+
+            // 流水线状态条停在失败阶段（2026-10-29）：让用户一眼看出"卡在流水线哪一步"，
+            // 而不是只有底部一张错误卡还要自己对照阶段。详情仍留在卡里。
+            pipeMarkFail(d.title);
 
             // 状态条：一行结论
             showStatus(`❌ ${d.title}` + (d.detail ? `：${d.detail}` : ''), 'warning');
@@ -4994,6 +5090,10 @@
             scrollToBottom();
             syncComposerVisibility();
             updateTokenInfo();
+            // 本轮记忆标注跟着消息一起刷新（2026-10-31）：生成结束、消息落地时才有
+            // 完整的"注入了几条"可看。放在这里而不是状态栏 —— 状态栏几秒后就被覆盖，
+            // 用户根本来不及点反馈。
+            syncMemoryTrace();
         }
 
         /** 左右分栏：左=前端代码，右=后端代码（各栏独立滚动） */
@@ -5091,8 +5191,10 @@
             body.innerHTML = DOMPurify.sanitize(marked.parse(msg.content || ''));
             content.appendChild(body);
 
-            // 代码高亮 + 复制按钮
-            body.querySelectorAll('pre code').forEach(block => {
+            // 代码高亮 + 复制按钮 + 重写按钮
+            // mdBlocks 与 DOM 里的 pre 顺序一一对应（都按 fence 出现顺序），用它拿块名/语言
+            const mdBlocks = extractCodeBlocks(msg.content || '');
+            body.querySelectorAll('pre code').forEach((block, blockIdx) => {
                 hljs.highlightElement(block);
                 const pre = block.parentElement;
                 const copyBtn = document.createElement('button');
@@ -5105,7 +5207,74 @@
                     copyBtn.textContent = ok ? '已复制' : '失败';
                     setTimeout(() => copyBtn.textContent = '复制', 2000);
                 };
-                pre.appendChild(copyBtn);
+                const tools = document.createElement('div');
+                tools.className = 'code-tools';
+                tools.appendChild(copyBtn);
+                pre.appendChild(tools);
+
+                // 「重写此文件」（2026-10-31）：只重做这一个块，不重发全量上下文。
+                // 只在 assistant 消息上给，且要求能定位到对应块（否则无从替换）。
+                const meta = mdBlocks[blockIdx];
+                if (msg.role !== 'assistant' || !meta) return;
+                const rwBtn = document.createElement('button');
+                rwBtn.className = 'code-rewrite-btn';
+                rwBtn.textContent = '🔄 重写此文件';
+                rwBtn.title = meta.name ? `重写 ${meta.name}` : '重写这个代码块';
+                // 大文件先确认（2026-10-31）：重写要把整份文件塞进 prompt，
+                // 手滑点一下的代价太大。确认条内联在工具条里，不用原生 confirm（会阻断页面）。
+                const askConfirm = () => new Promise((resolve) => {
+                    const tip = document.createElement('span');
+                    tip.className = 'code-confirm-tip';
+                    tip.textContent = '文件较大，确认重写？';
+                    const go = document.createElement('button');
+                    go.type = 'button';
+                    go.className = 'code-confirm-btn primary';
+                    go.textContent = '继续';
+                    const no = document.createElement('button');
+                    no.type = 'button';
+                    no.className = 'code-confirm-btn';
+                    no.textContent = '取消';
+                    const done = (v) => { tip.remove(); go.remove(); no.remove(); rwBtn.style.display = ''; resolve(v); };
+                    go.onclick = () => done(true);
+                    no.onclick = () => done(false);
+                    rwBtn.style.display = 'none';
+                    tools.append(tip, go, no);
+                });
+
+                rwBtn.onclick = async () => {
+                    if (blockRewrite().needsRewriteConfirm(meta)) {
+                        const yes = await askConfirm();
+                        if (!yes) return;
+                    }
+                    const label = rwBtn.textContent;
+                    rwBtn.disabled = true;
+                    rwBtn.textContent = '⏳ 重写中…';
+                    try {
+                        const r = await rewriteCodeBlock(idx, blockIdx);
+                        if (!r || !r.ok) {
+                            const why = {
+                                'no-block': '找不到这个代码块（内容可能已变化）',
+                                stale: '消息内容已变化，请重试',
+                                'empty-output': '模型没有返回代码块，已保留原文件',
+                                'request-failed': '请求失败，已保留原文件',
+                                syntax: `重写结果没通过语法校验（${(r && r.errors) || 0} 处），已保留原文件`
+                            }[(r && r.reason) || ''] || '重写失败，已保留原文件';
+                            showStatus(why, 'warning');
+                            return;
+                        }
+                        // 复检发现接口少了 → 仍然落盘（用户可能就是要删），但必须说清楚
+                        const base = r.changed
+                            ? `🔄 已重写 ${r.blockName || '代码块'}${r.warn ? `；⚠ ${r.warn}` : ''}（可在修复记录里回滚）`
+                            : '内容没有变化';
+                        showStatus(base, r.warn ? 'warning' : (r.changed ? 'success' : 'info'));
+                    } catch (err) {
+                        showStatus('重写失败（原文未改动）', 'warning');
+                    } finally {
+                        rwBtn.disabled = false;
+                        rwBtn.textContent = label;
+                    }
+                };
+                tools.appendChild(rwBtn);
             });
 
             // 操作按钮
@@ -5886,6 +6055,167 @@
         function smartSystemPrompt() { return promptAssembly().smartSystemPrompt(); }
         function withProjectContext(messages, ctxText) { return promptAssembly().withProjectContext(messages, ctxText); }
 
+        // ---------- 文件级重写（P1-1 第 1 步 2026-10-31：实现在 block-rewrite.mjs）----------
+        // 与质量闸门的「打回重生成」共用传输与复检，但提示词是**意图驱动**的（那份是错误驱动）。
+        let __br = null;
+        function blockRewrite() {
+            if (__br) return __br;
+            const factory = window.createBlockRewrite;
+            if (!factory) throw new Error('block-rewrite.mjs 未加载（window.createBlockRewrite 缺失）');
+            __br = factory({
+                extractCodeBlocks,
+                toRequestMessages,
+                streamRequest,
+                staticCheck: (o) => callStaticCheck(o),
+                getContext: () => ({
+                    // 符号表 / 契约 / 边界：与 review 取的是同一批资产
+                    symbolTable: JSON.stringify(state.quality.symbols || {}).slice(0, 4000),
+                    contract: state.workflow.contractText || '',
+                    boundaries: state.workflow.requirement || ''
+                }),
+                pushFixLog: (entry) => {
+                    if (!state.quality.fixLog) state.quality.fixLog = [];
+                    state.quality.fixLog.unshift({
+                        ...entry,
+                        file: entry.blockName || '',
+                        title: `重写 ${entry.blockName || '代码块'}`,
+                        convId: state.currentConvId || null,
+                        state: 'applied'
+                    });
+                },
+                // 重写后复检（零 token）：这个文件实现的接口有没有被重写弄丢。
+                // 用 /api/extract-api 而不是 /api/consistency —— 单文件场景下 consistency
+                // 的另一侧是空的，会把别的文件的接口全报成"缺失"，全是假警报。
+                verifyRewrite: async ({ block, newCode, lang }) => {
+                    const name = String((block && block.name) || '');
+                    const side = /\.(vue|jsx|tsx)$|(^|\/)(page|view|component|app|index)\./i.test(name)
+                        ? 'frontend' : 'backend';
+                    const wrap = (code) => ({ name, lang: lang || 'javascript', code });
+                    const key = (a) => `${String(a.method || 'GET').toUpperCase()} ${a.path}`;
+                    try {
+                        const before = await extractApisFromBlocks([wrap(block.code)], side);
+                        if (!before.apis.length) return null;     // 原文件本来就没有接口，无从比较
+                        const after = await extractApisFromBlocks([wrap(newCode)], side);
+                        const afterSet = new Set(after.apis.map(key));
+                        const lost = before.apis.map(key).filter(k => !afterSet.has(k));
+                        if (!lost.length) return null;
+                        return {
+                            text: `接口少了 ${lost.length} 个（${lost.slice(0, 3).join('、')}${lost.length > 3 ? '…' : ''}）`
+                        };
+                    } catch { return null; }
+                },
+                render: () => renderMessages(),
+                save: () => saveAll()
+            });
+            return __br;
+        }
+
+        /**
+         * 重写某个代码块（供 UI 与自检调用）。
+         * @param {number} msgIndex 消息下标
+         * @param {number} blockIndex 该消息内的块下标
+         */
+        async function rewriteCodeBlock(msgIndex, blockIndex, opt) {
+            const conv = getCurrentConv();
+            if (!conv) return { ok: false, reason: 'no-conv' };
+            return blockRewrite().rewriteBlock(conv, msgIndex, blockIndex, opt);
+        }
+
+        /**
+         * 本轮记忆预算账本（2026-10-31）：哪几条真进了 prompt、哪几条被预算裁掉。
+         * 反馈 UI 只能列出 injected —— 给没进 prompt 的经验点"帮到了"是假信号，
+         * 会直接污染 30 天半衰期的正向权重。
+         */
+        function memoryPlan() {
+            return promptAssembly().planMemoryBudget(state.appliedMemories, state.memories);
+        }
+        function memoryTrace() {
+            const plan = memoryPlan();
+            return promptAssembly().memoryTraceText(plan);
+        }
+
+        /** 反馈一条记忆（followed / violated）。这是 followed 的**唯一真实来源**：
+         *  质量闸门只能自动判定 violated，正向信号必须由用户点一下。 */
+        async function sendMemoryFeedback(entries) {
+            try {
+                if (!entries || !entries.length) return false;
+                const resp = await fetchWithTimeout(`${state.config.apiBase}/memories/feedback`, {
+                    method: 'POST', headers: apiHeaders(), body: JSON.stringify({ entries })
+                }, 5000);
+                return !!(resp && resp.ok);
+            } catch { return false; }   // 失败静默：反馈不该打断任何流程
+        }
+
+        /** 渲染「本轮记忆」标注：只列真正进了 prompt 的条目（被裁的只在文案里报数量） */
+        function syncMemoryTrace() {
+            const bar = document.getElementById('memTraceBar');
+            if (!bar) return;
+            const text = memoryTrace();
+            if (!text) { bar.style.display = 'none'; return; }   // 本轮没注入 → 整条不显示
+            const plan = memoryPlan();
+            bar.style.display = '';
+            const textEl = document.getElementById('memTraceText');
+            if (textEl) textEl.textContent = text;
+
+            const list = document.getElementById('memTraceList');
+            if (!list) return;
+            list.innerHTML = '';
+            for (const m of plan.injected) {
+                const row = document.createElement('div');
+                row.className = 'mem-trace-row';
+                row.dataset.id = m.id;
+
+                const tag = document.createElement('span');
+                tag.className = 'mem-trace-tag';
+                tag.textContent = m.type || '—';
+
+                const rule = document.createElement('span');
+                rule.className = 'mem-trace-rule';
+                rule.textContent = m.rule || m.id;
+                rule.title = m.rule || '';
+
+                const yes = document.createElement('button');
+                yes.type = 'button';
+                yes.className = 'mem-trace-btn';
+                yes.textContent = '✔ 帮到了';
+                const no = document.createElement('button');
+                no.type = 'button';
+                no.className = 'mem-trace-btn';
+                no.textContent = '✘ 帮倒忙了';
+
+                const fire = async (outcome) => {
+                    yes.disabled = true;
+                    no.disabled = true;
+                    const sent = await sendMemoryFeedback([{ id: m.id, outcome }]);
+                    yes.style.display = 'none';
+                    no.style.display = 'none';
+                    const done = document.createElement('span');
+                    done.className = 'mem-trace-done';
+                    done.textContent = sent
+                        ? (outcome === 'followed' ? '已记为帮到了' : '已记为帮倒忙了')
+                        : '记录失败';
+                    row.appendChild(done);
+                };
+                yes.onclick = () => fire('followed');
+                no.onclick = () => fire('violated');
+
+                row.append(tag, rule, yes, no);
+                list.appendChild(row);
+            }
+        }
+
+        // 展开/收起（只绑一次）
+        (function bindMemoryTrace() {
+            const btn = document.getElementById('memTraceToggle');
+            const list = document.getElementById('memTraceList');
+            if (!btn || !list) return;
+            btn.addEventListener('click', () => {
+                const open = list.style.display !== 'none';
+                list.style.display = open ? 'none' : '';
+                btn.textContent = open ? '查看' : '收起';
+            });
+        })();
+
         // ---------- 存量配置迁移（R2 第三步 2026-10-28：实现搬到 state-migrate.mjs）----------
         // 只搬【归一化纯函数】；saveAll 仍在页面 —— 它要序列化整个 state，和页面强耦合。
         // 供应商/模型的规则绑定 PROVIDERS 表，留在页面以函数形式注入。
@@ -6094,7 +6424,10 @@
                 state.memories = (data && data.prompt) || '';
                 // 记下注入了哪些记忆（id + 场景 + source），校验后据此算遵守/违反
                 state.appliedMemories = (data && data.items || []).map(m => ({
-                    id: m.id, sceneTags: m.sceneTags || [], source: m.source || ''
+                    id: m.id, sceneTags: m.sceneTags || [], source: m.source || '',
+                    // type / rule（2026-10-31）：标注"L1×2 / L2×1"和逐条反馈要显示原文，
+                    // 缺了这两个字段，反馈列表只能显示一串 id —— 用户没法判断该点哪条。
+                    type: m.type || '', rule: String(m.rule || '').slice(0, 120)
                 }));
             } catch { /* 记忆库故障不阻塞生成 */ }
         }
@@ -6768,32 +7101,160 @@
          * 加流水线 UI 后必须收口，否则总有几处忘了刷新界面。
          */
         function setStage(v) {
+            const prev = state.workflow.stage;
             state.workflow.stage = v;
             if (v === 'idle') pipelineSeen.clear();
             else pipelineSeen.add(v);
+            // 新一轮（idle → 某阶段）才重置计时；阶段间推进不能重置，
+            // 否则每次 setStage 都把"本轮耗时"清零，用户永远只看到最后一段的耗时。
+            if (v !== 'idle' && (prev === 'idle' || !prev)) pipeReset();
+            if (v === 'idle') pipeFail = null;
             syncPipeline();
         }
 
-        /** 把当前阶段映射到流水线节点（顺序不写死：双端是 contract→generating→review） */
+        // ---------- 流水线状态条（2026-10-29 改版：单行 + 4 段进度 + 耗时）----------
+        // 4 段与真实 stage 严格一一对应（不允许为视觉凑段数）。
+        // 双端模式（runContractGeneration 不设 analyzing）会让第 1 段显示为 .skip。
+        const STAGE_ORDER = ['analyzing', 'contract', 'generating', 'review'];
+        const STAGE_NAME = {
+            analyzing: '需求解析', contract: '契约生成',
+            generating: '代码生成', review: '审查与对齐'
+        };
+        let pipeStartAt = 0;
+        let pipeTickTimer = null;    // 200ms 刷新耗时
+        let pipeHoldTimer = null;    // 完成态保留 3s
+        let pipeWasActive = false;
+        let pipeFail = null;         // { stage, text }：失败就停在那一段，不自动消失
+
+        /** 两个定时器只在这里创建/清理（别处各自 set/clear 是泄漏的源头） */
+        function pipeStopTimers() {
+            if (pipeTickTimer) { clearInterval(pipeTickTimer); pipeTickTimer = null; }
+            if (pipeHoldTimer) { clearTimeout(pipeHoldTimer); pipeHoldTimer = null; }
+        }
+
+        function pipeReset() {
+            pipeStopTimers();
+            pipeStartAt = Date.now();
+            pipeFail = null;
+            pipeWasActive = false;
+        }
+
+        function pipeElapsed() {
+            const s = Math.max(0, (Date.now() - (pipeStartAt || Date.now())) / 1000);
+            return s < 60 ? `${s.toFixed(1)}s` : `${Math.floor(s / 60)}m${Math.round(s % 60)}s`;
+        }
+
+        /**
+         * 标记本轮失败：状态条停在失败阶段、点变红、右侧给「查看」。
+         * 详情留在错误卡里，条上只放一行摘要（单行 34px 放不下整段原因）。
+         */
+        function pipeMarkFail(text) {
+            if (state.config.mode !== 'workflow') return;
+            const stage = state.workflow.stage || 'idle';
+            if (stage === 'idle') return;
+            pipeFail = { stage, text: String(text || '').slice(0, 40) };
+            syncPipeline();
+        }
+
+        /** 把当前阶段映射到状态条（4 段：cur / done / skip / 未到） */
         function syncPipeline() {
             const bar = document.getElementById('pipelineBar');
             if (!bar) return;
             const stage = state.workflow.stage || 'idle';
-            const active = state.config.mode === 'workflow' && stage !== 'idle';
-            bar.style.display = active ? '' : 'none';
-            const stat = document.getElementById('pipeStatus');
+            const workflow = state.config.mode === 'workflow';
+            const active = workflow && stage !== 'idle';
+
+            const dot = document.getElementById('pipeDot');
+            const nameEl = document.getElementById('pipeName');
+            const segs = document.getElementById('pipeSegs');
+            const metaEl = document.getElementById('pipeMeta');
+            const timeEl = document.getElementById('pipeTime');
+            const actEl = document.getElementById('pipeAct');
+            const idx = STAGE_ORDER.indexOf(stage);
+
             if (!active) {
-                if (stat) stat.textContent = 'idle';
+                // 跑完 → 保留 3 秒"全部完成"再淡出；失败态保持不动（等用户查看）
+                if (pipeWasActive && workflow && !pipeFail) {
+                    pipeWasActive = false;
+                    if (pipeTickTimer) { clearInterval(pipeTickTimer); pipeTickTimer = null; }
+                    if (pipeHoldTimer) clearTimeout(pipeHoldTimer);
+                    if (dot) dot.className = 'pipe-dot done';
+                    if (nameEl) nameEl.textContent = '全部完成';
+                    if (segs) for (const el of segs.children) el.className = 'done';
+                    if (metaEl) metaEl.textContent = `${STAGE_ORDER.length}/${STAGE_ORDER.length}`;
+                    if (timeEl) timeEl.textContent = ` · ${pipeElapsed()}`;
+                    if (actEl) { actEl.textContent = ''; actEl.onclick = null; }
+                    bar.classList.add('pipe-done');
+                    bar.style.display = '';
+                    pipeHoldTimer = setTimeout(() => {
+                        bar.style.display = 'none';
+                        bar.classList.remove('pipe-done');
+                        pipeHoldTimer = null;
+                    }, 3000);
+                    return;
+                }
+                // 完成态保留期内别打断（3 秒没走完就先不藏）
+                if (pipeHoldTimer) return;
+                pipeStopTimers();
+                pipeWasActive = false;
+                bar.style.display = 'none';
                 return;
             }
-            bar.querySelectorAll('.node').forEach((n) => {
-                const s = n.dataset.stage;
-                const st = s === stage ? 'running' : (pipelineSeen.has(s) ? 'done' : 'idle');
-                n.className = 'node ' + st;
-                const label = n.querySelector('.node-state');
-                if (label) label.textContent = st === 'done' ? '完成' : (st === 'running' ? '进行中' : '等待');
-            });
-            if (stat) stat.textContent = stage;
+
+            // 进入运行态：打断上一轮的完成态定时器，否则它会把本轮状态条藏掉
+            if (pipeHoldTimer) { clearTimeout(pipeHoldTimer); pipeHoldTimer = null; }
+            bar.classList.remove('pipe-done');
+            pipeWasActive = true;
+            bar.style.display = '';
+
+            // 段状态：当前=cur；走过的=done；当前之前但从没走过=skip（双端跳过需求解析）
+            if (segs) {
+                STAGE_ORDER.forEach((s, i) => {
+                    const el = segs.children[i];
+                    if (!el) return;
+                    el.className = i === idx ? 'cur'
+                        : (pipelineSeen.has(s) ? 'done'
+                            : (i < idx ? 'skip' : ''));
+                });
+            }
+
+            const name = STAGE_NAME[stage] || stage;
+            if (dot) dot.className = 'pipe-dot ' + (pipeFail && pipeFail.stage === stage ? 'err' : 'running');
+            if (nameEl) {
+                nameEl.textContent = pipeFail && pipeFail.stage === stage
+                    ? `${name}${pipeFail.text ? ' · ' + pipeFail.text : ''}`
+                    : name;
+            }
+            if (metaEl) metaEl.textContent = `${idx + 1}/${STAGE_ORDER.length}`;
+            if (timeEl) timeEl.textContent = ` · ${pipeElapsed()}`;
+
+            if (actEl) {
+                if (pipeFail && pipeFail.stage === stage) {
+                    actEl.textContent = '查看';
+                    actEl.onclick = () => {
+                        if (!els.errorCard || els.errorCard.style.display === 'none') return;
+                        els.errorCard.scrollIntoView({ block: 'center', behavior: 'smooth' });
+                        els.errorCard.classList.add('ai-filled');
+                        setTimeout(() => els.errorCard.classList.remove('ai-filled'), 1200);
+                    };
+                    // 出错后冻住耗时，避免 interval 退化成"一直跑的定时器"
+                    if (pipeTickTimer) { clearInterval(pipeTickTimer); pipeTickTimer = null; }
+                } else {
+                    actEl.textContent = '停止';
+                    actEl.onclick = () => { if (els.stopBtn) els.stopBtn.click(); };
+                }
+            }
+
+            // 耗时：只跑一个 interval，且只改文字（不重算段状态）
+            if (!pipeTickTimer && !(pipeFail && pipeFail.stage === stage)) {
+                pipeTickTimer = setInterval(() => {
+                    const t = document.getElementById('pipeTime');
+                    if (!t) return;
+                    const st = state.workflow.stage || 'idle';
+                    if (st === 'idle') return;
+                    t.textContent = ` · ${pipeElapsed()}`;
+                }, 200);
+            }
         }
 
         /**
@@ -8300,6 +8761,9 @@
             const r = state.config.req;
             r.goal = (els.reqGoal.value || '').trim();
             r.stack = (els.reqStack.value || '').trim();
+            // AI 起草的那句话也是草稿的一部分（2026-10-29）：不存进 state 的话刷新就丢，
+            // 用户辛苦写的一句要重想一遍。
+            r.aiDraft = (els.reqAiInput && els.reqAiInput.value ? els.reqAiInput.value : '').trim();
             // 第 4 层约束拆块（2026-10-23）：四类结构化 + 旧的"其他约束"字段保留
             r.conSecurity = (els.reqConSecurity.value || '').trim();
             r.conPerf = (els.reqConPerf.value || '').trim();
@@ -8551,11 +9015,44 @@
 
             const COOLDOWN_MS = 30000;
             const TIMEOUT_MS = 25000;
+            const MAX_TOKENS = 2000;
             let busy = false;
             let lastAt = 0;
+            let lastUndo = null;   // 最近一次起草前的 req 快照（只留一份）
+            let lastDesc = '';     // 最近一次用过的描述（失败后用「重试」复用）
+            const undoBtn = document.getElementById('reqAiUndo');
+            const retryBtn = document.getElementById('reqAiRetry');
 
-            // 回填后闪一下，让用户看到"哪几处变了"（键名 = state.config.req 的键）
-            const HL = {
+            /** 把后端的失败信号翻成"用户该做什么" —— 三种原因对应三种动作 */
+            function describeFailure(data) {
+                if (data && data.timedOut) {
+                    return '上游超时（表单未改动）· 可点「用上次描述重试」';
+                }
+                const pe = String((data && data.parseError) || '');
+                const used = Number((data && data.usage && data.usage.completion_tokens) || 0);
+                if (used >= MAX_TOKENS) {
+                    return `模型输出被截断（${used} tokens 用满上限 ${MAX_TOKENS}）· 简化描述或换小一点的模型再试`;
+                }
+                if (pe === 'empty content') {
+                    return '上游返回了空内容（模型侧限流/异常）· 可点「用上次描述重试」';
+                }
+                if (pe === 'not a JSON object') {
+                    return '模型没有按 JSON 输出 · 可重试一次，换模型更稳';
+                }
+                if (pe) return `返回内容无法解析（${pe}）· 可点「用上次描述重试」`;
+                return 'AI 返回的内容无法解析，已保留原表单（可重试一次）';
+            }
+
+            function showRetry(desc) {
+                lastDesc = desc || lastDesc;
+                if (retryBtn && lastDesc) retryBtn.style.display = '';
+            }
+
+            // 回填后闪一下，**只闪真正新增的那几行**（键名 = state.config.req 的键）。
+            // 2026-10-29 修：此前 features/dataModel/invariants/authz 高亮的是整个容器，
+            // 而 syncReqUI 刚把容器整体重建过 —— 结果一整片闪烁、容器里原有内容也跟着闪，
+            // 用户看不出"到底哪几行是 AI 加的"。
+            const HL_SIMPLE = {
                 goal: () => els.reqGoal, stack: () => els.reqStack,
                 conSecurity: () => els.reqConSecurity, conPerf: () => els.reqConPerf,
                 conStyle: () => els.reqConStyle, conBanned: () => els.reqConBanned,
@@ -8564,16 +9061,60 @@
                 deliver: () => els.reqDeliver, level: () => els.reqLevel,
                 withTest: () => els.reqTest, withDeploy: () => els.reqDeploy,
                 withMigration: () => els.reqMigration, withAuthMw: () => els.reqAuthMw,
-                withErrorMw: () => els.reqErrorMw, withEntry: () => els.reqEntry,
-                features: () => els.featList, dataModel: () => els.dmEntities,
-                invariants: () => els.dmInvariants, authz: () => els.authzRules
+                withErrorMw: () => els.reqErrorMw, withEntry: () => els.reqEntry
             };
-            function flash(keys) {
+            // 区块类字段：选中项/输入框这类单元素 + 动态行容器（按行高亮）
+            const HL_SECTIONS = {
+                features: { lists: [{ box: () => els.featList, sel: '.feat-row' }] },
+                dataModel: {
+                    singles: [() => els.dmPkType, () => els.dmMoneyUnit],
+                    lists: [
+                        { box: () => els.dmEntities, sel: '.dm-entity' },
+                        { box: () => els.dmEnums, sel: '.dm-enum-row' }
+                    ]
+                },
+                invariants: { lists: [{ box: () => els.dmInvariants, sel: '.dm-inv-row' }] },
+                authz: {
+                    singles: [() => els.authzRoles, () => els.authzRowLevel, () => els.authzOwnerKey],
+                    lists: [{ box: () => els.authzRules, sel: '.dm-rule-row' }]
+                }
+            };
+
+            function flashEl(el) {
+                if (!el || !el.classList) return;
+                el.classList.add('ai-filled');
+                setTimeout(() => el.classList.remove('ai-filled'), 1400);
+            }
+
+            /** 合并前快照各容器的行数：合并后只闪"新增的那几行" */
+            function snapshotRows() {
+                const snap = {};
+                for (const [key, cfg] of Object.entries(HL_SECTIONS)) {
+                    snap[key] = (cfg.lists || []).map(l => {
+                        const box = l.box();
+                        return box ? box.querySelectorAll(l.sel).length : 0;
+                    });
+                }
+                return snap;
+            }
+
+            function flashApplied(keys, snap, mode) {
                 for (const k of keys || []) {
-                    const el = (HL[k] || (() => null))();
-                    if (!el || !el.classList) continue;
-                    el.classList.add('ai-filled');
-                    setTimeout(() => el.classList.remove('ai-filled'), 1400);
+                    const simple = HL_SIMPLE[k];
+                    if (simple) { flashEl(simple()); continue; }
+                    const sec = HL_SECTIONS[k];
+                    if (!sec) continue;
+                    for (const s of (sec.singles || [])) flashEl(s());
+                    (sec.lists || []).forEach((l, i) => {
+                        const box = l.box();
+                        if (!box) return;
+                        const rows = box.querySelectorAll(l.sel);
+                        // 覆盖模式：整块都是新写的 → 全闪；只填模式：只闪新增的尾部
+                        const from = mode === 'overwrite'
+                            ? 0
+                            : Math.min((snap[k] || [])[i] || 0, rows.length);
+                        for (let n = from; n < rows.length; n++) flashEl(rows[n]);
+                    });
                 }
             }
 
@@ -8595,12 +9136,18 @@
                     showStatus(`AI 起草冷却中（${left}s 后可再试）`, 'warning');
                     return;
                 }
-                // 输入框为空就回落到第 1 层"功能与最终效果"
-                const desc = (input.value || '').trim() || (els.reqGoal.value || '').trim();
+                // 输入框为空就回落到第 1 层"功能与最终效果"，再回落到上次描述
+                const desc = (input.value || '').trim()
+                    || (els.reqGoal.value || '').trim()
+                    || lastDesc;
                 if (!desc) {
                     showStatus('先用一句话描述你要做的东西', 'warning');
                     input.focus();
                     return;
+                }
+                // 描述过短只提醒、不拦截：拦下来会让"我就想试试"的用户彻底没法用
+                if (desc.length < 15) {
+                    showStatus('描述再具体一点（做什么、给谁用、要不要存数据）会填得更准', 'info');
                 }
                 if (!state.config.apiKey) {
                     showStatus('先在顶栏填 API 密钥', 'warning');
@@ -8610,7 +9157,9 @@
                 const label = btn.textContent;
 
                 busy = true;
-                lastAt = now;
+                // 冷却只在【真正拿到并应用了结果】之后开始计（见下方 lastAt 赋值）。
+                // 2026-10-29 修：此前 lastAt 在这里就赋值，失败（4xx / 降级 / 断网 / 超时）
+                // 也会吃满 30s —— 失败的成本不该等于成功的成本，那正是用户最想立刻重试的时刻。
                 box.classList.add('busy');
                 btn.textContent = '⏳ 起草中…';
                 try {
@@ -8625,6 +9174,7 @@
                             apiBase: cfg.providerBase || '',
                             description: desc,
                             overwrite: mode === 'overwrite',
+                            maxTokens: MAX_TOKENS,
                             timeoutMs: 20000
                         })
                     }, TIMEOUT_MS);
@@ -8632,25 +9182,79 @@
                     if (!resp.ok) {
                         let msg = String(resp.status);
                         try { const e = await resp.json(); if (e && e.message) msg = e.message; } catch { /* 非 JSON 响应 */ }
+                        lastAt = 0;          // 失败不吃冷却：让用户立刻能改参数重试
+                        showRetry(desc);
                         showStatus(`AI 起草失败：${msg}`, 'error');
                         return;
                     }
                     const data = await resp.json();
                     if (data.timedOut || data.degraded) {
-                        showStatus('AI 返回的内容无法解析，已保留原表单（可重试一次）', 'warning');
+                        lastAt = 0;          // 没拿到可用结果，同样不罚等待
+                        showRetry(desc);
+                        // 失败原因分三种（超时 / 空返回 / 没有按 JSON 输出 / 输出被截断），
+                        // 用户该采取的动作不同 —— 不能一律说"无法解析"
+                        showStatus(describeFailure(data), 'warning');
                         return;
                     }
+                    // 起草前快照：overwrite 会把原有内容冲掉，没有撤销就不可逆
+                    collectReq();
+                    const undoSnap = JSON.parse(JSON.stringify(state.config.req || {}));
+                    const snap = snapshotRows();
                     const r = applySpecFill(data.spec, { mode, description: desc });
-                    if (r.filled) flash(r.applied);
+                    if (r.filled) {
+                        lastAt = Date.now();   // 只有真正应用了结果才进入冷却
+                        lastUndo = undoSnap;
+                        if (undoBtn) undoBtn.style.display = '';
+                        if (retryBtn) retryBtn.style.display = 'none';
+                        flashApplied(r.applied, snap, mode);
+                    } else {
+                        // 字段都已有内容（提示语让用户切「覆盖」重试）→ 不能反手把人锁 30s
+                        lastAt = 0;
+                    }
                 } catch (err) {
-                    // 超时 / 断网：一律不动表单
-                    showStatus('AI 起草超时或网络异常（表单未改动）', 'warning');
+                    // 超时 / 断网：一律不动表单，也不进冷却
+                    lastAt = 0;
+                    showRetry(desc);
+                    showStatus('AI 起草超时或网络异常（表单未改动）· 可点「用上次描述重试」', 'warning');
                 } finally {
                     busy = false;
                     box.classList.remove('busy');
                     btn.textContent = label;
                 }
             });
+
+            // 撤销：回到起草前那份 req（只保留最近一次，够用且不会把 state 撑大）
+            if (undoBtn) {
+                undoBtn.addEventListener('click', () => {
+                    if (!lastUndo) return;
+                    state.config.req = JSON.parse(JSON.stringify(lastUndo));
+                    syncReqUI();
+                    saveAll();
+                    lastUndo = null;
+                    undoBtn.style.display = 'none';
+                    showStatus('已撤销本次 AI 填写（恢复到起草前）', 'info');
+                });
+            }
+
+            // 描述实时进 state（2026-10-29）：saveAll 不会调 collectReq，
+            // 若只靠 collectReq 收 aiDraft，"打了字但没点任何按钮就刷新"仍会丢。
+            // input 实时写 state、change（失焦）落盘 —— 两条都很便宜。
+            input.addEventListener('input', () => {
+                state.config.req.aiDraft = (input.value || '').trim();
+            });
+            input.addEventListener('change', () => {
+                try { saveAll(); } catch { /* 落盘失败不影响输入 */ }
+            });
+
+            // 重试：把那句描述放回输入框再点一次（失败后 lastAt 已清零，不会被冷却拦）
+            if (retryBtn) {
+                retryBtn.addEventListener('click', () => {
+                    if (!lastDesc) return;
+                    input.value = lastDesc;
+                    retryBtn.style.display = 'none';
+                    btn.click();
+                });
+            }
         })();
 
         /**
@@ -8986,6 +9590,7 @@
             const r = state.config.req || {};
             els.reqGoal.value = r.goal || '';
             els.reqStack.value = r.stack || '';
+            if (els.reqAiInput) els.reqAiInput.value = r.aiDraft || '';   // 描述也回填（刷新不丢）
             els.reqConstraints.value = r.constraints || '';
             els.reqConSecurity.value = r.conSecurity || '';
             els.reqConPerf.value = r.conPerf || '';
@@ -9987,6 +10592,28 @@
                 workflow: () => state.workflow,
                 config: () => state.config,
                 req: () => state.config.req,   // 需求表单草稿（AI 起草的落点）
+                // 流水线状态条自检口（2026-10-29）：定时器是否残留、走过哪些阶段
+                // 记忆预算账本（2026-10-31）：本轮注入/被裁的条目，供标注与反馈 UI 使用
+                memoryPlan,
+                memoryTrace,
+                sendMemoryFeedback,
+                // 仅测试/控制台：直接灌入一轮召回结果并重绘标注（不经过真实请求）
+                debugSetMemories: (items, prompt) => {
+                    state.appliedMemories = (items || []).map(m => ({
+                        id: m.id, type: m.type || '', rule: String(m.rule || '').slice(0, 120),
+                        sceneTags: m.sceneTags || [], source: m.source || ''
+                    }));
+                    state.memories = String(prompt || '');
+                    syncMemoryTrace();
+                    return memoryPlan();
+                },
+                pipeState: () => ({
+                    stage: state.workflow.stage,
+                    seen: [...pipelineSeen],
+                    tick: !!pipeTickTimer,
+                    hold: !!pipeHoldTimer,
+                    fail: pipeFail ? { ...pipeFail } : null
+                }),
                 conversations: () => state.conversations,
                 currentConvId: () => state.currentConvId,
             };

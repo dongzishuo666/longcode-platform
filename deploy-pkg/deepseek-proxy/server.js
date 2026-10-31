@@ -71,6 +71,8 @@ import {
   buildSpecFillUserPrompt,
   normalizeSpecFill,
 } from './lib/spec-fill.js';
+// 闸门事件日志（2026-10-30）：只记统计，fire-and-forget，写失败静默
+import { logStaticCheck, logConsistency, logReviewPrecheck } from './lib/gate-log.js';
 
 const PORT = Number(process.env.PORT || 8787);
 const HOST = process.env.HOST || '127.0.0.1';
@@ -446,6 +448,9 @@ app.post('/api/review', async (req, reply) => {
             });
           }
 
+          // 记一笔"这次送审前被静态拦下 / 放过"，用于统计省了多少次模型调用
+          logReviewPrecheck(st, parsed.code.length);
+
           preCheck = {
             supported: st.supported,
             syntax: st.syntax,
@@ -660,6 +665,8 @@ app.post('/api/static-check', async (req, reply) => {
       },
       'static-check done'
     );
+    // 闸门统计落盘（一行一次调用；不记代码正文）
+    logStaticCheck(result, parsed.code.length);
     // 注意：不能写 ok:true 覆盖——否则解析器加载失败会被静默吞掉，
     // 表现为「语法 0 错误」，而实际根本没解析。
     if (!result.ok) {
@@ -732,6 +739,9 @@ app.post('/api/consistency', async (req, reply) => {
       { ...result.summary, ms: Date.now() - started },
       'consistency done'
     );
+    // 闸门统计落盘：chars 取三方输入总长（只记长度，不记内容）
+    logConsistency(result, [parsed.contract, parsed.frontend, parsed.backend]
+      .reduce((n, x) => n + (typeof x === 'string' ? x.length : (Array.isArray(x) ? x.join('').length : 0)), 0));
     return reply.send({ ok: true, ...result, ms: Date.now() - started });
   } catch (err) {
     req.log.error({ err }, 'consistency failed');
